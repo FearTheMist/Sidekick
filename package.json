@@ -1,0 +1,92 @@
+{
+  "name": "sidekick",
+  "displayName": "Sidekick",
+  "description": "A starter VS Code extension with configurable LLM chat panel.",
+  "version": "0.0.1",
+  "publisher": "local-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:sidekick.openChat",
+    "onCommand:sidekick.configureModel"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sidekick.openChat",
+        "title": "Sidekick: Open Chat"
+      },
+      {
+        "command": "sidekick.configureModel",
+        "title": "Sidekick: Configure Model"
+      }
+    ],
+    "configuration": {
+      "title": "Sidekick",
+      "properties": {
+        "sidekick.apiBaseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "LLM API base URL"
+        },
+        "sidekick.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "LLM API key"
+        },
+        "sidekick.model": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "Model name used for chat"
+        },
+        "sidekick.promptCacheKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional provider-specific prompt cache key (required by some routed models)"
+        },
+        "sidekick.extraHeadersJson": {
+          "type": "string",
+          "default": "{}",
+          "description": "Optional JSON object for extra request headers"
+        },
+        "sidekick.extraBodyJson": {
+          "type": "string",
+          "default": "{}",
+          "description": "Optional JSON object merged into request body for provider-specific fields"
+        },
+        "sidekick.apiMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "chatCompletions",
+            "responses"
+          ],
+          "default": "auto",
+          "description": "Which API format to use for inference"
+        },
+        "sidekick.systemPrompt": {
+          "type": "string",
+          "default": "You are a helpful coding assistant.",
+          "description": "System prompt for the assistant"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "echo \"No lint configured\"",
+    "test": "echo \"No test configured\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.5"
+  }
+}

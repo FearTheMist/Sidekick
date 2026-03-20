@@ -1,0 +1,11 @@
+node_modules/
+out/
+*.vsix
+.DS_Store
+test/test.js
+dist
+
+### VS Code ###
+.vscode/**
+!.vscode/tasks.json
+!.vscode/launch.json
