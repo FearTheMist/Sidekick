@@ -116,9 +116,8 @@ export function getChatWebviewHtml(): string {
     #homeInput,
     #chatInput {
       flex: 1;
-      min-height: 38px;
-      max-height: 140px;
-      resize: vertical;
+      height: 100px;
+      resize: none;
       border: 1px solid var(--vscode-input-border);
       background: var(--vscode-input-background);
       color: var(--vscode-input-foreground);
@@ -225,6 +224,25 @@ export function getChatWebviewHtml(): string {
     let activeSessionId = "";
     let activeMessages = [];
     let activeTitle = "Conversation";
+    const defaultHomePlaceholder = "Start a new chat...";
+    const defaultChatPlaceholder = "Ask anything about code...";
+
+    function updateInputPlaceholder(context) {
+      if (!context) {
+        homeInputEl.placeholder = defaultHomePlaceholder;
+        chatInputEl.placeholder = defaultChatPlaceholder;
+        return;
+      }
+
+      const lineRange =
+        context.startLine === context.endLine
+          ? "line " + context.startLine
+          : "lines " + context.startLine + "-" + context.endLine;
+      const shortPath = context.filePath.length > 42 ? "..." + context.filePath.slice(-39) : context.filePath;
+      const contextHint = "Context: " + shortPath + " (" + lineRange + ")";
+      homeInputEl.placeholder = defaultHomePlaceholder + " | " + contextHint;
+      chatInputEl.placeholder = defaultChatPlaceholder + " | " + contextHint;
+    }
 
     function renderHomeSessions() {
       homeSessionListEl.innerHTML = "";
@@ -362,6 +380,10 @@ export function getChatWebviewHtml(): string {
         chatSendEl.disabled = false;
         showChat();
         renderHomeSessions();
+      }
+
+      if (data.type === "editorContext") {
+        updateInputPlaceholder(data.context || null);
       }
 
       if (data.type === "assistantStart") {

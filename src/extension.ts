@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { registerChatMessageHandler } from "./chat/chatController";
+import { postEditorContext, registerChatMessageHandler } from "./chat/chatController";
 import { ChatSessionStore } from "./chat/sessionStore";
 import { getChatWebviewHtml } from "./chat/chatWebview";
 import { ChatMessage } from "./chat/types";
@@ -23,6 +23,7 @@ export function activate(context: vscode.ExtensionContext): void {
       };
       webviewView.webview.html = getChatWebviewHtml();
       registerChatMessageHandler(webviewView.webview, context, sessionStore, requestChatCompletion);
+      postEditorContext(webviewView.webview);
 
       webviewView.onDidDispose(() => {
         chatView = undefined;
@@ -51,11 +52,23 @@ export function activate(context: vscode.ExtensionContext): void {
     });
   });
 
+  const syncEditorContext = () => {
+    if (!chatView) {
+      return;
+    }
+    postEditorContext(chatView.webview);
+  };
+
+  const selectionListener = vscode.window.onDidChangeTextEditorSelection(syncEditorContext);
+  const activeEditorListener = vscode.window.onDidChangeActiveTextEditor(syncEditorContext);
+
   context.subscriptions.push(chatViewProvider);
   context.subscriptions.push(openChatCommand);
   context.subscriptions.push(configureModelCommand);
   context.subscriptions.push(openSettingsCommand);
   context.subscriptions.push(generateCommitMessageCommand);
+  context.subscriptions.push(selectionListener);
+  context.subscriptions.push(activeEditorListener);
 }
 
 export function deactivate(): void {

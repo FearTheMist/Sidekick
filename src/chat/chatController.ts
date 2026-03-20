@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { buildSelectionContextPrompt, getCurrentEditorSelectionContext, toSelectionHint } from "./editorContext";
 import { ChatSessionStore } from "./sessionStore";
 import { ChatMessage } from "./types";
 
@@ -30,6 +31,7 @@ export function registerChatMessageHandler(
 
       if (message.type === "ready") {
         await postHomeState(webview, sessionStore);
+        postEditorContext(webview);
         return;
       }
 
@@ -70,6 +72,11 @@ export function registerChatMessageHandler(
         return;
       }
 
+      const editorContext = getCurrentEditorSelectionContext();
+      const finalPrompt = editorContext
+        ? `${userText}\n\n${buildSelectionContextPrompt(editorContext)}`
+        : userText;
+
       const requestedSessionId = (message.sessionId ?? "").trim();
       const activeSession = requestedSessionId
         ? (await sessionStore.getChatState(requestedSessionId)).session
@@ -89,7 +96,7 @@ export function registerChatMessageHandler(
       try {
         webview.postMessage({ type: "assistantStart" });
         const historyBeforePrompt = updatedAfterUser.messages.slice(0, -1) as ChatMessage[];
-        const reply = await requestChatCompletion(userText, historyBeforePrompt, (delta) => {
+        const reply = await requestChatCompletion(finalPrompt, historyBeforePrompt, (delta) => {
           webview.postMessage({ type: "assistantDelta", text: delta });
         });
 
@@ -111,6 +118,14 @@ async function postHomeState(webview: vscode.Webview, sessionStore: ChatSessionS
   webview.postMessage({
     type: "homeState",
     sessions: homeState.sessions
+  });
+}
+
+export function postEditorContext(webview: vscode.Webview): void {
+  const context = getCurrentEditorSelectionContext();
+  webview.postMessage({
+    type: "editorContext",
+    context: toSelectionHint(context) ?? null
   });
 }
 
