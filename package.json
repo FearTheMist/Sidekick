@@ -1,9 +1,14 @@
 {
-  "name": "sidekick",
-  "displayName": "Sidekick",
+  "name": "sidekick-ai-code-assistant",
+  "displayName": "Sidekick - AI Code Assistant",
   "description": "A starter VS Code extension with configurable LLM chat panel.",
   "version": "0.0.1",
-  "publisher": "local-dev",
+  "publisher": "Lydia",
+  "repository":{
+    "type": "git",
+    "url": "https://github.com/FearTheMist/Sidekick"
+  },
+  "license": "MIT",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -135,5 +140,8 @@
     "@types/node": "^20.12.12",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "vsce": "^2.15.0"
   }
 }
