@@ -9,76 +9,76 @@ type ApiMode = "auto" | "chatCompletions" | "responses";
 type StringMap = Record<string, string>;
 type UnknownMap = Record<string, unknown>;
 
-let chatPanel: vscode.WebviewPanel | undefined;
+let chatView: vscode.WebviewView | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
+  const chatViewProvider = vscode.window.registerWebviewViewProvider("sidekick.chatView", {
+    resolveWebviewView(webviewView) {
+      chatView = webviewView;
+      webviewView.webview.options = {
+        enableScripts: true
+      };
+      webviewView.webview.html = getWebviewHtml();
+      registerChatMessageHandler(webviewView.webview, context);
+
+      webviewView.onDidDispose(() => {
+        chatView = undefined;
+      });
+    }
+  });
+
   const configureModelCommand = vscode.commands.registerCommand("sidekick.configureModel", async () => {
     await openConfigurationWizard();
   });
 
-  const openChatCommand = vscode.commands.registerCommand("sidekick.openChat", () => {
-    if (chatPanel) {
-      chatPanel.reveal(vscode.ViewColumn.Beside);
-      return;
-    }
-
-    chatPanel = vscode.window.createWebviewPanel(
-      "sidekickChat",
-      "Sidekick Chat",
-      vscode.ViewColumn.Beside,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true
-      }
-    );
-
-    chatPanel.webview.html = getWebviewHtml();
-
-    chatPanel.webview.onDidReceiveMessage(
-      async (message: { type: string; text?: string; history?: ChatMessage[] }) => {
-        if (message.type === "configure") {
-          await vscode.commands.executeCommand("sidekick.configureModel");
-          return;
-        }
-
-        if (message.type !== "send") {
-          return;
-        }
-
-        const userText = (message.text ?? "").trim();
-        const history = Array.isArray(message.history) ? message.history : [];
-
-        if (!userText) {
-          chatPanel?.webview.postMessage({ type: "error", text: "Message cannot be empty." });
-          return;
-        }
-
-        try {
-          chatPanel?.webview.postMessage({ type: "assistantStart" });
-          const reply = await requestChatCompletion(userText, history, (delta) => {
-            chatPanel?.webview.postMessage({ type: "assistantDelta", text: delta });
-          });
-          chatPanel?.webview.postMessage({ type: "assistantDone", text: reply });
-        } catch (error) {
-          const errorText = error instanceof Error ? error.message : "Unknown error";
-          chatPanel?.webview.postMessage({ type: "error", text: errorText });
-        }
-      },
-      undefined,
-      context.subscriptions
-    );
-
-    chatPanel.onDidDispose(() => {
-      chatPanel = undefined;
-    });
+  const openChatCommand = vscode.commands.registerCommand("sidekick.openChat", async () => {
+    await vscode.commands.executeCommand("workbench.view.extension.sidekick");
+    chatView?.show(false);
   });
 
+  context.subscriptions.push(chatViewProvider);
   context.subscriptions.push(openChatCommand);
   context.subscriptions.push(configureModelCommand);
 }
 
 export function deactivate(): void {
   // No-op
+}
+
+function registerChatMessageHandler(webview: vscode.Webview, context: vscode.ExtensionContext): void {
+  webview.onDidReceiveMessage(
+    async (message: { type: string; text?: string; history?: ChatMessage[] }) => {
+      if (message.type === "configure") {
+        await vscode.commands.executeCommand("sidekick.configureModel");
+        return;
+      }
+
+      if (message.type !== "send") {
+        return;
+      }
+
+      const userText = (message.text ?? "").trim();
+      const history = Array.isArray(message.history) ? message.history : [];
+
+      if (!userText) {
+        webview.postMessage({ type: "error", text: "Message cannot be empty." });
+        return;
+      }
+
+      try {
+        webview.postMessage({ type: "assistantStart" });
+        const reply = await requestChatCompletion(userText, history, (delta) => {
+          webview.postMessage({ type: "assistantDelta", text: delta });
+        });
+        webview.postMessage({ type: "assistantDone", text: reply });
+      } catch (error) {
+        const errorText = error instanceof Error ? error.message : "Unknown error";
+        webview.postMessage({ type: "error", text: errorText });
+      }
+    },
+    undefined,
+    context.subscriptions
+  );
 }
 
 async function openConfigurationWizard(): Promise<void> {

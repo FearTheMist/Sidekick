@@ -12,7 +12,8 @@
   ],
   "activationEvents": [
     "onCommand:sidekick.openChat",
-    "onCommand:sidekick.configureModel"
+    "onCommand:sidekick.configureModel",
+    "onView:sidekick.chatView"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -26,6 +27,24 @@
         "title": "Sidekick: Configure Model"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sidekick",
+          "title": "Sidekick",
+          "icon": "media/sidekick-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "sidekick": [
+        {
+          "id": "sidekick.chatView",
+          "name": "Chat",
+          "type": "webview"
+        }
+      ]
+    },
     "configuration": {
       "title": "Sidekick",
       "properties": {
