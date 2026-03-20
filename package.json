@@ -13,6 +13,7 @@
   "activationEvents": [
     "onCommand:sidekick.openChat",
     "onCommand:sidekick.configureModel",
+    "onCommand:sidekick.openSettings",
     "onView:sidekick.chatView"
   ],
   "main": "./out/extension.js",
@@ -25,6 +26,10 @@
       {
         "command": "sidekick.configureModel",
         "title": "Sidekick: Configure Model"
+      },
+      {
+        "command": "sidekick.openSettings",
+        "title": "Sidekick: Open Settings"
       }
     ],
     "viewsContainers": {
