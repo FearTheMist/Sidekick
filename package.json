@@ -14,6 +14,7 @@
     "onCommand:sidekick.openChat",
     "onCommand:sidekick.configureModel",
     "onCommand:sidekick.openSettings",
+    "onCommand:sidekick.generateCommitMessage",
     "onView:sidekick.chatView"
   ],
   "main": "./out/extension.js",
@@ -30,6 +31,14 @@
       {
         "command": "sidekick.openSettings",
         "title": "Sidekick: Open Settings"
+      },
+      {
+        "command": "sidekick.generateCommitMessage",
+        "title": "Sidekick: Generate Commit Message",
+        "icon": {
+          "light": "media/generate-commit-light.svg",
+          "dark": "media/generate-commit-dark.svg"
+        }
       }
     ],
     "viewsContainers": {
@@ -47,6 +56,15 @@
           "id": "sidekick.chatView",
           "name": "Chat",
           "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "scm/title": [
+        {
+          "command": "sidekick.generateCommitMessage",
+          "when": "scmProvider",
+          "group": "navigation"
         }
       ]
     },
@@ -97,6 +115,11 @@
           "type": "string",
           "default": "You are a helpful coding assistant.",
           "description": "System prompt for the assistant"
+        },
+        "sidekick.commitMessagePrompt": {
+          "type": "string",
+          "default": "You are an expert software engineer writing concise git commit messages. Match the repository's existing commit style, focus on intent, and return only the commit message text.",
+          "description": "Prompt used when generating commit messages from git diff"
         }
       }
     }

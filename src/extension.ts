@@ -3,6 +3,7 @@ import { registerChatMessageHandler } from "./chat/chatController";
 import { ChatSessionStore } from "./chat/sessionStore";
 import { getChatWebviewHtml } from "./chat/chatWebview";
 import { ChatMessage } from "./chat/types";
+import { generateCommitMessage } from "./git/commitMessage";
 import { openSettingsPanel } from "./settings/settingsPanel";
 
 type ApiMode = "auto" | "chatCompletions" | "responses";
@@ -42,10 +43,19 @@ export function activate(context: vscode.ExtensionContext): void {
     chatView?.show(false);
   });
 
+  const generateCommitMessageCommand = vscode.commands.registerCommand("sidekick.generateCommitMessage", async () => {
+    await generateCommitMessage(async (systemPrompt, userPrompt) => {
+      return await requestChatCompletion(userPrompt, [], () => {
+        // No-op: commit message generation uses final text only.
+      }, systemPrompt);
+    });
+  });
+
   context.subscriptions.push(chatViewProvider);
   context.subscriptions.push(openChatCommand);
   context.subscriptions.push(configureModelCommand);
   context.subscriptions.push(openSettingsCommand);
+  context.subscriptions.push(generateCommitMessageCommand);
 }
 
 export function deactivate(): void {
@@ -55,7 +65,8 @@ export function deactivate(): void {
 async function requestChatCompletion(
   userText: string,
   history: ChatMessage[],
-  onDelta: (delta: string) => void
+  onDelta: (delta: string) => void,
+  systemPromptOverride?: string
 ): Promise<string> {
   const config = vscode.workspace.getConfiguration("sidekick");
   const apiBaseUrl = config.get<string>("apiBaseUrl", "https://api.openai.com/v1").replace(/\/$/, "");
@@ -65,7 +76,7 @@ async function requestChatCompletion(
   const extraHeadersJson = config.get<string>("extraHeadersJson", "{}");
   const extraBodyJson = config.get<string>("extraBodyJson", "{}");
   const apiMode = config.get<ApiMode>("apiMode", "auto");
-  const systemPrompt = config.get<string>("systemPrompt", "You are a helpful coding assistant.");
+  const systemPrompt = (systemPromptOverride ?? config.get<string>("systemPrompt", "You are a helpful coding assistant.")).trim();
 
   const extraHeaders = parseStringJsonObject(extraHeadersJson, "sidekick.extraHeadersJson");
   const extraBody = parseUnknownJsonObject(extraBodyJson, "sidekick.extraBodyJson");

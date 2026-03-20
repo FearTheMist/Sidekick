@@ -57,7 +57,11 @@ function getCurrentSettings(): Record<string, string> {
     promptCacheKey: config.get<string>("promptCacheKey", ""),
     extraHeadersJson: config.get<string>("extraHeadersJson", "{}"),
     extraBodyJson: config.get<string>("extraBodyJson", "{}"),
-    systemPrompt: config.get<string>("systemPrompt", "You are a helpful coding assistant.")
+    systemPrompt: config.get<string>("systemPrompt", "You are a helpful coding assistant."),
+    commitMessagePrompt: config.get<string>(
+      "commitMessagePrompt",
+      "You are an expert software engineer writing concise git commit messages. Match the repository's existing commit style, focus on intent, and return only the commit message text."
+    )
   };
 }
 
@@ -71,6 +75,7 @@ async function saveSettings(settings: Record<string, string>): Promise<void> {
   const extraBodyJson = (settings.extraBodyJson ?? "{}").trim() || "{}";
   const systemPrompt = (settings.systemPrompt ?? "").trim();
   const apiKey = (settings.apiKey ?? "").trim();
+  const commitMessagePrompt = (settings.commitMessagePrompt ?? "").trim();
 
   if (!apiBaseUrl) {
     throw new Error("API Base URL is required.");
@@ -95,6 +100,12 @@ async function saveSettings(settings: Record<string, string>): Promise<void> {
   await config.update("extraBodyJson", extraBodyJson, vscode.ConfigurationTarget.Global);
   await config.update("systemPrompt", systemPrompt || "You are a helpful coding assistant.", vscode.ConfigurationTarget.Global);
   await config.update("apiKey", apiKey, vscode.ConfigurationTarget.Global);
+  await config.update(
+    "commitMessagePrompt",
+    commitMessagePrompt ||
+      "You are an expert software engineer writing concise git commit messages. Match the repository's existing commit style, focus on intent, and return only the commit message text.",
+    vscode.ConfigurationTarget.Global
+  );
 }
 
 function parseJsonObject(raw: string, settingKey: string): Record<string, unknown> {
@@ -253,6 +264,11 @@ function getSettingsWebviewHtml(): string {
       <textarea id="systemPrompt" placeholder="You are a helpful coding assistant."></textarea>
     </div>
 
+    <div class="field">
+      <label for="commitMessagePrompt">Commit Message Prompt</label>
+      <textarea id="commitMessagePrompt" placeholder="Prompt for generating commit messages..."></textarea>
+    </div>
+
     <div class="actions">
       <button id="save">Save Settings</button>
       <span id="status"></span>
@@ -269,7 +285,8 @@ function getSettingsWebviewHtml(): string {
       promptCacheKey: document.getElementById("promptCacheKey"),
       extraHeadersJson: document.getElementById("extraHeadersJson"),
       extraBodyJson: document.getElementById("extraBodyJson"),
-      systemPrompt: document.getElementById("systemPrompt")
+      systemPrompt: document.getElementById("systemPrompt"),
+      commitMessagePrompt: document.getElementById("commitMessagePrompt")
     };
     const statusEl = document.getElementById("status");
     const saveEl = document.getElementById("save");
