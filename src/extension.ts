@@ -30,6 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("sidekick.providers")) {
         gateway.setProviders(SidekickConfig.getProviders());
+        chatPanel.refreshProviders();
       }
     })
   );

@@ -180,12 +180,32 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     .providers { overflow: auto; height: calc(100% - 51px); }
     .provider-item {
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 8px;
       align-items: center;
       padding: 10px;
       border-bottom: 1px solid #22375b;
       cursor: pointer;
+    }
+    .provider-main {
+      min-width: 0;
+      overflow: hidden;
+    }
+    .provider-name {
+      display: block;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .provider-url {
+      display: block;
+      margin-top: 2px;
+      color: #9cb4d7;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .provider-item.active { background: var(--active); }
     .toggle-btn {
@@ -198,6 +218,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       color: var(--text);
       background: #172742;
       cursor: pointer;
+      justify-self: end;
     }
     .toggle-btn.off { border-color: #68445d; color: #f3adc4; }
     .content { padding: 12px; overflow: auto; height: calc(100% - 51px); }
@@ -329,7 +350,18 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         };
 
         const left = document.createElement('div');
-        left.innerHTML = '<strong>' + escapeHtml(provider.label || provider.id || '(unnamed)') + '</strong><br/><span style="color:#9cb4d7;font-size:12px;">' + escapeHtml(provider.baseUrl || '') + '</span>';
+        left.className = 'provider-main';
+
+        const nameEl = document.createElement('span');
+        nameEl.className = 'provider-name';
+        nameEl.textContent = provider.label || provider.id || '(unnamed)';
+
+        const urlEl = document.createElement('span');
+        urlEl.className = 'provider-url';
+        urlEl.textContent = provider.baseUrl || '';
+
+        left.appendChild(nameEl);
+        left.appendChild(urlEl);
 
         const toggle = document.createElement('button');
         const isOn = provider.enabled !== false;

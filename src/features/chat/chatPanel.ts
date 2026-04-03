@@ -3,7 +3,12 @@ import { AgentRunner } from "../../agent/agentRunner";
 import { SidekickConfig } from "../../core/config";
 import { LlmGateway, ProviderConfig } from "../../core/llm";
 import { collectContext, toContextPrompt } from "../../context/contextCollector";
-import { ChatHistoryItem, ChatMessage, ChatStore } from "./chatStore";
+import {
+  ChatHistoryItem,
+  ChatMessage,
+  ChatSelectionState,
+  ChatStore,
+} from "./chatStore";
 
 type IncomingMessage =
   | { type: "ready" }
@@ -52,8 +57,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.agentRunner = new AgentRunner(gateway);
     this.history = this.store.getHistory();
     const profile = SidekickConfig.getChatProfile();
-    this.selectedProviderId = profile.providerId;
-    this.selectedModel = profile.model;
+    const saved = this.store.getSelection();
+    this.selectedProviderId = saved?.providerId || profile.providerId;
+    this.selectedModel = saved?.model || profile.model;
   }
 
   getActiveProfile(): { providerId: string; model?: string } {
@@ -61,6 +67,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       providerId: this.selectedProviderId,
       model: this.selectedModel,
     };
+  }
+
+  refreshProviders(): void {
+    this.ensureValidSelection(SidekickConfig.getProviders());
+    this.postHistory();
   }
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
@@ -74,14 +85,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (raw: IncomingMessage) => {
       switch (raw.type) {
         case "ready": {
-          const profile = SidekickConfig.getChatProfile();
-          this.post({
-            type: "history",
-            history: this.history,
-            providers: SidekickConfig.getProviders(),
-            profileProviderId: profile.providerId,
-            profileModel: profile.model || "",
-          });
+          this.postHistory();
           break;
         }
         case "send": {
@@ -95,6 +99,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           if (typeof raw.model === "string") {
             this.selectedModel = raw.model;
           }
+          await this.saveSelection();
           break;
         }
         case "clear": {
@@ -157,6 +162,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       profile.model = model;
       this.selectedModel = model;
     }
+    await this.saveSelection();
 
     const messages = [
       {
@@ -250,6 +256,51 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage(message);
   }
 
+  private postHistory(): void {
+    const providers = SidekickConfig.getProviders();
+    this.ensureValidSelection(providers);
+    this.post({
+      type: "history",
+      history: this.history,
+      providers,
+      profileProviderId: this.selectedProviderId,
+      profileModel: this.selectedModel || "",
+    });
+  }
+
+  private ensureValidSelection(providers: ProviderConfig[]): void {
+    if (providers.length === 0) {
+      this.selectedProviderId = "";
+      this.selectedModel = "";
+      return;
+    }
+
+    let provider = providers.find((item) => item.id === this.selectedProviderId);
+    if (!provider) {
+      provider = providers[0];
+      this.selectedProviderId = provider.id;
+    }
+
+    const models = provider.models || [];
+    if (models.length === 0) {
+      this.selectedModel = provider.defaultModel || this.selectedModel || "";
+      return;
+    }
+
+    const exists = models.some((item) => item.id === this.selectedModel);
+    if (!exists) {
+      this.selectedModel = models[0].id;
+    }
+  }
+
+  private async saveSelection(): Promise<void> {
+    const selection: ChatSelectionState = {
+      providerId: this.selectedProviderId,
+      model: this.selectedModel,
+    };
+    await this.store.saveSelection(selection);
+  }
+
   private renderHtml(webview: vscode.Webview): string {
     const nonce = String(Date.now());
     return `<!DOCTYPE html>
@@ -337,6 +388,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       padding: 0;
       border: none;
       background: transparent;
+    }
+    .thinking {
+      color: var(--muted);
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .thinking-dots::after {
+      content: '...';
+      display: inline-block;
+      width: 12px;
+      animation: dots 1.1s steps(4, end) infinite;
+      overflow: hidden;
+      vertical-align: bottom;
+    }
+    @keyframes dots {
+      from { width: 0; }
+      to { width: 12px; }
     }
     .tool-msg {
       border-left: 3px solid #eab308;
@@ -659,9 +729,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       if (msg.type === 'assistant-start') {
         inProgress = append('assistant', '');
+        inProgress.dataset.loading = '1';
+        inProgress.innerHTML = '<span class="thinking"><span>Sidekick is thinking</span><span class="thinking-dots"></span></span>';
       }
 
       if (msg.type === 'assistant-delta' && inProgress) {
+        if (inProgress.dataset.loading === '1') {
+          inProgress.innerHTML = '';
+          delete inProgress.dataset.loading;
+        }
         inProgress.innerHTML += renderMarkdown(msg.delta);
         messages.scrollTop = messages.scrollHeight;
       }

@@ -19,6 +19,12 @@ export interface ToolActivityHistoryItem {
 export type ChatHistoryItem = ChatMessage | ToolActivityHistoryItem;
 
 const HISTORY_KEY = "sidekick.chat.history";
+const SELECTION_KEY = "sidekick.chat.selection";
+
+export interface ChatSelectionState {
+  providerId: string;
+  model?: string;
+}
 
 export class ChatStore {
   constructor(private readonly context: vscode.ExtensionContext) {}
@@ -52,5 +58,13 @@ export class ChatStore {
 
   async clear(): Promise<void> {
     await this.context.workspaceState.update(HISTORY_KEY, []);
+  }
+
+  getSelection(): ChatSelectionState | undefined {
+    return this.context.workspaceState.get<ChatSelectionState>(SELECTION_KEY);
+  }
+
+  async saveSelection(selection: ChatSelectionState): Promise<void> {
+    await this.context.workspaceState.update(SELECTION_KEY, selection);
   }
 }
