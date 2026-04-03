@@ -105,13 +105,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         case "clear": {
           this.history = [];
           await this.store.clear();
-          this.post({
-            type: "history",
-            history: [],
-            providers: SidekickConfig.getProviders(),
-            profileProviderId: SidekickConfig.getChatProfile().providerId,
-            profileModel: SidekickConfig.getChatProfile().model || "",
-          });
+          this.postHistory();
           break;
         }
         case "export": {
