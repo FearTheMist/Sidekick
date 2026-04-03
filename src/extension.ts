@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 import { SidekickConfig } from "./core/config";
 import { LlmGateway, ProviderConfig } from "./core/llm";
+import { ChatPanelProvider } from "./features/chat/chatPanel";
 import { SidekickInlineCompletionProvider } from "./features/inline/inlineProvider";
+import { openSettingsPanel } from "./features/settings/settingsPanel";
 
 export function activate(context: vscode.ExtensionContext): void {
   const gateway = new LlmGateway(SidekickConfig.getProviders());
@@ -10,8 +12,10 @@ export function activate(context: vscode.ExtensionContext): void {
     gateway,
     inlineOutput
   );
+  const chatPanel = new ChatPanelProvider(context, gateway);
 
   context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(ChatPanelProvider.viewType, chatPanel),
     vscode.languages.registerInlineCompletionItemProvider(
       { pattern: "**" },
       inlineProvider
@@ -36,6 +40,37 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("sidekick.rejectInline", async () => {
       await vscode.commands.executeCommand("editor.action.inlineSuggest.hide");
     }),
+    vscode.commands.registerCommand("sidekick.openChat", async () => {
+      await chatPanel.focus();
+    }),
+    vscode.commands.registerCommand("sidekick.openSettings", async () => {
+      await openSettingsPanel();
+    }),
+    vscode.commands.registerCommand("sidekick.explainCode", async () => {
+      await chatPanel.promptAction(
+        `Explain this code:\n\n${getSelectedText() || "(no selection)"}`
+      );
+    }),
+    vscode.commands.registerCommand("sidekick.refactorSelection", async () => {
+      await chatPanel.promptAction(
+        `Refactor this code:\n\n${getSelectedText() || "(no selection)"}`
+      );
+    }),
+    vscode.commands.registerCommand("sidekick.fixSelection", async () => {
+      await chatPanel.promptAction(
+        `Find and fix bugs in this code:\n\n${getSelectedText() || "(no selection)"}`
+      );
+    }),
+    vscode.commands.registerCommand("sidekick.addTestsSelection", async () => {
+      await chatPanel.promptAction(
+        `Write tests for this code:\n\n${getSelectedText() || "(no selection)"}`
+      );
+    }),
+    vscode.commands.registerCommand("sidekick.documentSelection", async () => {
+      await chatPanel.promptAction(
+        `Document this code:\n\n${getSelectedText() || "(no selection)"}`
+      );
+    }),
     vscode.commands.registerCommand("sidekick.testProviderConnection", async () => {
       await runProviderTest(gateway);
     }),
@@ -50,6 +85,14 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {}
+
+function getSelectedText(): string {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.selection.isEmpty) {
+    return "";
+  }
+  return editor.document.getText(editor.selection);
+}
 
 async function runProviderTest(gateway: LlmGateway): Promise<void> {
   const providers = gateway.getProviders();

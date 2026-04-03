@@ -12,6 +12,13 @@ const DEFAULT_PROVIDERS: ProviderConfig[] = [
     apiKey: "",
     defaultModel: "gpt-4o-mini",
     enabled: true,
+    models: [
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o Mini",
+        endpointType: "OPENAI",
+      },
+    ],
   },
   {
     id: "openaiResponses",
@@ -21,6 +28,13 @@ const DEFAULT_PROVIDERS: ProviderConfig[] = [
     apiKey: "",
     defaultModel: "gpt-4o-mini",
     enabled: true,
+    models: [
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o Mini",
+        endpointType: "OPENAI_RESPONSE",
+      },
+    ],
   },
 ];
 
@@ -46,10 +60,16 @@ const DEFAULT_AGENT_PROFILE: ModelProfile = {
 };
 
 export class SidekickConfig {
+  static getProviderSettings(): ProviderConfig[] {
+    return (
+      vscode.workspace
+        .getConfiguration(SECTION)
+        .get<ProviderConfig[]>("providers", DEFAULT_PROVIDERS) || []
+    );
+  }
+
   static getProviders(): ProviderConfig[] {
-    const raw = vscode.workspace
-      .getConfiguration(SECTION)
-      .get<ProviderConfig[]>("providers", DEFAULT_PROVIDERS);
+    const raw = this.getProviderSettings();
     return (raw || []).filter((provider) => provider.enabled !== false);
   }
 

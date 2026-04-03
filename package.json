@@ -15,11 +15,41 @@
     "onStartupFinished",
     "onCommand:sidekick.testProviderConnection",
     "onCommand:sidekick.inlineDebugPing",
-    "onCommand:sidekick.openInlineLogs"
+    "onCommand:sidekick.openInlineLogs",
+    "onCommand:sidekick.openChat",
+    "onView:sidekick.chatView"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
+      {
+        "command": "sidekick.openChat",
+        "title": "Sidekick: Open Chat"
+      },
+      {
+        "command": "sidekick.openSettings",
+        "title": "Sidekick: Open Settings"
+      },
+      {
+        "command": "sidekick.explainCode",
+        "title": "Sidekick: Explain Code"
+      },
+      {
+        "command": "sidekick.refactorSelection",
+        "title": "Sidekick: Refactor"
+      },
+      {
+        "command": "sidekick.fixSelection",
+        "title": "Sidekick: Fix Bugs"
+      },
+      {
+        "command": "sidekick.addTestsSelection",
+        "title": "Sidekick: Add Tests"
+      },
+      {
+        "command": "sidekick.documentSelection",
+        "title": "Sidekick: Document"
+      },
       {
         "command": "sidekick.acceptInlinePart",
         "title": "Sidekick: Accept Next Inline Word"
@@ -41,6 +71,53 @@
         "title": "Sidekick: Open Inline Logs"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sidekick",
+          "title": "Sidekick",
+          "icon": "media/sidekick-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "sidekick": [
+        {
+          "id": "sidekick.chatView",
+          "name": "Chat",
+          "type": "webview"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "sidekick.explainCode",
+          "group": "navigation@50",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "sidekick.refactorSelection",
+          "group": "navigation@51",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "sidekick.fixSelection",
+          "group": "navigation@52",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "sidekick.addTestsSelection",
+          "group": "navigation@53",
+          "when": "editorTextFocus"
+        },
+        {
+          "command": "sidekick.documentSelection",
+          "group": "navigation@54",
+          "when": "editorTextFocus"
+        }
+      ]
+    },
     "keybindings": [
       {
         "command": "editor.action.inlineSuggest.commit",

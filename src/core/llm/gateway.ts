@@ -1,5 +1,7 @@
 import {
   LlmMessage,
+  ModelEndpointType,
+  OpenAiCompatibleMode,
   ProviderConfig,
   StreamEvent,
   StreamRequest,
@@ -9,6 +11,8 @@ import { readSse } from "./sse";
 
 interface ResolvedRequest {
   provider: ProviderConfig;
+  apiType: ProviderConfig["apiType"];
+  compatibleMode?: OpenAiCompatibleMode;
   model: string;
   messages: LlmMessage[];
   tools: StreamRequest["tools"];
@@ -44,7 +48,7 @@ export class LlmGateway {
   async *streamChat(request: StreamRequest): AsyncGenerator<StreamEvent> {
     const resolved = this.resolveRequest(request);
 
-    switch (resolved.provider.apiType) {
+    switch (resolved.apiType) {
       case "openai-chat":
         yield* this.streamOpenAiChat(resolved);
         return;
@@ -52,7 +56,7 @@ export class LlmGateway {
         yield* this.streamOpenAiResponses(resolved);
         return;
       case "openai-compatible":
-        if (resolved.provider.compatibleMode === "responses") {
+        if (resolved.compatibleMode === "responses") {
           yield* this.streamOpenAiResponses(resolved);
           return;
         }
@@ -78,6 +82,8 @@ export class LlmGateway {
 
     return {
       provider,
+      apiType: this.resolveApiType(provider, request.profile.model),
+      compatibleMode: this.resolveCompatibleMode(provider, request.profile.model),
       model: request.profile.model || provider.defaultModel,
       messages: request.messages,
       tools: request.tools,
@@ -85,6 +91,71 @@ export class LlmGateway {
       maxTokens: request.profile.maxTokens,
       signal: request.signal,
     };
+  }
+
+  private resolveApiType(
+    provider: ProviderConfig,
+    requestedModel?: string
+  ): ProviderConfig["apiType"] {
+    const model = requestedModel || provider.defaultModel;
+    const modelConfig = provider.models?.find((item) => item.id === model);
+    if (!modelConfig) {
+      return provider.apiType;
+    }
+
+    const mapped = this.endpointTypeToApiType(modelConfig.endpointType);
+    return mapped || provider.apiType;
+  }
+
+  private resolveCompatibleMode(
+    provider: ProviderConfig,
+    requestedModel?: string
+  ): OpenAiCompatibleMode | undefined {
+    const model = requestedModel || provider.defaultModel;
+    const modelConfig = provider.models?.find((item) => item.id === model);
+    const endpointType = modelConfig?.endpointType;
+    if (!endpointType) {
+      return provider.compatibleMode;
+    }
+
+    const normalized = endpointType.trim().toUpperCase();
+    if (
+      normalized === "OPENAI_RESPONSE" ||
+      normalized === "OPENAI_RESPONSES" ||
+      normalized === "OPENAI_COMPATIBLE_RESPONSE" ||
+      normalized === "OPENAI_COMPATIBLE_RESPONSES"
+    ) {
+      return "responses";
+    }
+
+    if (normalized === "OPENAI_COMPATIBLE" && provider.apiType === "openai-compatible") {
+      return "chat";
+    }
+
+    return provider.compatibleMode;
+  }
+
+  private endpointTypeToApiType(
+    endpointType: ModelEndpointType
+  ): ProviderConfig["apiType"] | undefined {
+    const normalized = endpointType.trim().toUpperCase();
+    if (normalized === "OPENAI") {
+      return "openai-chat";
+    }
+    if (normalized === "OPENAI_RESPONSE" || normalized === "OPENAI_RESPONSES") {
+      return "openai-responses";
+    }
+    if (
+      normalized === "OPENAI_COMPATIBLE" ||
+      normalized === "OPENAI_COMPATIBLE_RESPONSE" ||
+      normalized === "OPENAI_COMPATIBLE_RESPONSES"
+    ) {
+      return "openai-compatible";
+    }
+    if (normalized === "ANTHROPIC" || normalized === "ANTHROPIC_MESSAGES") {
+      return "anthropic-messages";
+    }
+    return undefined;
   }
 
   private async *streamOpenAiChat(

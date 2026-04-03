@@ -6,6 +6,22 @@ export type ProviderApiType =
 
 export type OpenAiCompatibleMode = "chat" | "responses";
 
+export type ModelEndpointType =
+  | "OPENAI"
+  | "OPENAI_RESPONSE"
+  | "OPENAI_RESPONSES"
+  | "OPENAI_COMPATIBLE"
+  | "OPENAI_COMPATIBLE_RESPONSE"
+  | "OPENAI_COMPATIBLE_RESPONSES"
+  | "ANTHROPIC"
+  | "ANTHROPIC_MESSAGES";
+
+export interface ProviderModelConfig {
+  id: string;
+  name: string;
+  endpointType: ModelEndpointType;
+}
+
 export interface ProviderConfig {
   id: string;
   label: string;
@@ -17,6 +33,7 @@ export interface ProviderConfig {
   headers?: Record<string, string>;
   body?: Record<string, unknown>;
   compatibleMode?: OpenAiCompatibleMode;
+  models?: ProviderModelConfig[];
 }
 
 export interface ModelProfile {
