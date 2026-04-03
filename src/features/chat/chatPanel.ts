@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { AgentRunner } from "../../agent/agentRunner";
 import { SidekickConfig } from "../../core/config";
 import { LlmGateway, ProviderConfig } from "../../core/llm";
 import { collectContext, toContextPrompt } from "../../context/contextCollector";
@@ -30,6 +31,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private view?: vscode.WebviewView;
   private readonly store: ChatStore;
+  private readonly agentRunner: AgentRunner;
   private history: ChatMessage[];
 
   constructor(
@@ -37,6 +39,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     private readonly gateway: LlmGateway
   ) {
     this.store = new ChatStore(context);
+    this.agentRunner = new AgentRunner(gateway);
     this.history = this.store.getHistory();
   }
 
@@ -140,7 +143,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let answer = "";
     this.post({ type: "assistant-start" });
 
-    for await (const event of this.gateway.streamChat({ profile, messages })) {
+    for await (const event of this.agentRunner.run(messages, profile)) {
       if (event.type === "text") {
         answer += event.delta;
         this.post({ type: "assistant-delta", delta: event.delta });

@@ -1,6 +1,14 @@
 import * as vscode from "vscode";
 import { ModelProfile, ProviderConfig } from "./llm";
 
+export interface McpServerConfig {
+  name: string;
+  command: string;
+  args?: string[];
+  cwd?: string;
+  enabled?: boolean;
+}
+
 const SECTION = "sidekick";
 
 const DEFAULT_PROVIDERS: ProviderConfig[] = [
@@ -89,5 +97,13 @@ export class SidekickConfig {
     return vscode.workspace
       .getConfiguration(SECTION)
       .get<ModelProfile>("agentProfile", DEFAULT_AGENT_PROFILE);
+  }
+
+  static getMcpServers(): McpServerConfig[] {
+    return (
+      vscode.workspace
+        .getConfiguration(SECTION)
+        .get<McpServerConfig[]>("mcpServers", []) || []
+    );
   }
 }

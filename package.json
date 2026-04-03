@@ -192,6 +192,11 @@
             "maxTokens": 4096
           },
           "description": "Model profile for agent and tool calls."
+        },
+        "sidekick.mcpServers": {
+          "type": "array",
+          "default": [],
+          "description": "MCP servers. Example: [{\"name\":\"filesystem\",\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\",\".\"],\"enabled\":true}]"
         }
       }
     }
