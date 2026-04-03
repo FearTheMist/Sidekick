@@ -81,5 +81,6 @@ export interface StreamRequest {
   profile: ModelProfile;
   messages: LlmMessage[];
   tools?: ToolDefinition[];
+  extraBody?: Record<string, unknown>;
   signal?: AbortSignal;
 }

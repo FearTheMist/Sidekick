@@ -235,6 +235,10 @@ async function generateCommitMessage(
         return;
       }
 
+      const selectedProvider = providers.find(
+        (item) => item.id === profile.providerId
+      );
+
       const cwd = folder.uri.fsPath;
 
       let staged = "";
@@ -289,6 +293,7 @@ async function generateCommitMessage(
         for await (const event of gateway.streamChat({
           profile,
           messages: [{ role: "user", content: prompt }],
+          extraBody: buildNoThinkingParams(selectedProvider, profile.model),
         })) {
           if (event.type === "text") {
             text += event.delta;
@@ -339,6 +344,61 @@ function sanitizeCommitMessage(raw: string): string {
     .replace(/```$/g, "")
     .trim();
   return cleaned;
+}
+
+function buildNoThinkingParams(
+  provider: ProviderConfig | undefined,
+  model: string | undefined
+): Record<string, unknown> {
+  if (!provider) {
+    return {};
+  }
+
+  const vendor = detectVendor(provider, model);
+
+  if (provider.apiType === "anthropic-messages") {
+    return {
+      thinking: { type: "disabled" },
+    };
+  }
+
+  if (vendor === "glm") {
+    return {
+      thinking: { type: "disabled" },
+      enable_thinking: false,
+    };
+  }
+
+  if (vendor === "qwen") {
+    return {
+      enable_thinking: false,
+    };
+  }
+
+  return {
+    reasoning: { effort: "low" },
+    reasoning_effort: "low",
+  };
+}
+
+function detectVendor(
+  provider: ProviderConfig,
+  model: string | undefined
+): "openai" | "glm" | "qwen" | "other" {
+  const joined = [provider.id, provider.label, provider.baseUrl, model || ""]
+    .join(" ")
+    .toLowerCase();
+
+  if (joined.includes("zhipu") || joined.includes("glm")) {
+    return "glm";
+  }
+  if (joined.includes("qwen") || joined.includes("dashscope")) {
+    return "qwen";
+  }
+  if (joined.includes("openai")) {
+    return "openai";
+  }
+  return "other";
 }
 
 async function applyToGitInputBox(message: string): Promise<boolean> {

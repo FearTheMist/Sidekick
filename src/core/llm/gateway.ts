@@ -16,6 +16,7 @@ interface ResolvedRequest {
   model: string;
   messages: LlmMessage[];
   tools: StreamRequest["tools"];
+  extraBody?: Record<string, unknown>;
   temperature?: number;
   maxTokens?: number;
   signal?: AbortSignal;
@@ -87,6 +88,7 @@ export class LlmGateway {
       model: request.profile.model || provider.defaultModel,
       messages: request.messages,
       tools: request.tools,
+      extraBody: request.extraBody,
       temperature: request.profile.temperature,
       maxTokens: request.profile.maxTokens,
       signal: request.signal,
@@ -171,6 +173,7 @@ export class LlmGateway {
         ...(message.name ? { name: message.name } : {}),
       })),
       ...(request.provider.body || {}),
+      ...(request.extraBody || {}),
     };
 
     if (typeof request.temperature === "number") {
@@ -270,6 +273,7 @@ export class LlmGateway {
         content: message.content,
       })),
       ...(request.provider.body || {}),
+      ...(request.extraBody || {}),
     };
 
     if (typeof request.temperature === "number") {
@@ -387,6 +391,7 @@ export class LlmGateway {
         .filter((message) => message.role === "user" || message.role === "assistant")
         .map((message) => ({ role: message.role, content: message.content })),
       ...(request.provider.body || {}),
+      ...(request.extraBody || {}),
     };
 
     if (request.tools?.length) {
