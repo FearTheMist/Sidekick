@@ -201,6 +201,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     }
     .toggle-btn.off { border-color: #68445d; color: #f3adc4; }
     .content { padding: 12px; overflow: auto; height: calc(100% - 51px); }
+    .triple-row { display: grid; grid-template-columns: 1fr 1.4fr 1.2fr; gap: 10px; }
     .field { margin-bottom: 12px; }
     .field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
     input, select, button {
@@ -221,6 +222,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     .danger { border-color: #7d3652; color: #f3adc4; }
     @media (max-width: 980px) {
       .root { grid-template-columns: 1fr; grid-template-rows: 250px 1fr; }
+      .triple-row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -240,19 +242,21 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         <button id="save">Save</button>
       </div>
       <div class="content">
-        <div class="field">
-          <label>Provider Name</label>
-          <input id="providerName" placeholder="OpenAI" />
-        </div>
+        <div class="triple-row">
+          <div class="field">
+            <label>Provider Name</label>
+            <input id="providerName" placeholder="OpenAI" />
+          </div>
 
-        <div class="field">
-          <label>API Base URL</label>
-          <input id="baseUrl" placeholder="https://api.openai.com/v1" />
-        </div>
+          <div class="field">
+            <label>API Base URL</label>
+            <input id="baseUrl" placeholder="https://api.openai.com/v1" />
+          </div>
 
-        <div class="field">
-          <label>API Key</label>
-          <input id="apiKey" type="password" />
+          <div class="field">
+            <label>API Key</label>
+            <input id="apiKey" type="password" />
+          </div>
         </div>
 
         <div class="field">
