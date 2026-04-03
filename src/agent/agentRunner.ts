@@ -57,9 +57,25 @@ export class AgentRunner {
         }
 
         for (const call of toolCalls) {
+          yield {
+            type: "tool_activity",
+            id: call.id,
+            phase: "start",
+            name: call.name,
+            detail: this.describeToolCall(call),
+          };
+
           const result = call.name.includes(".")
             ? await this.runMcpTool(mcpClients, call)
             : await runtime.runTool(call.name, call.argumentsText);
+
+          yield {
+            type: "tool_activity",
+            id: call.id,
+            phase: "end",
+            name: call.name,
+            detail: this.summarizeToolResult(result),
+          };
 
           workingMessages.push({
             role: "assistant",
@@ -127,5 +143,38 @@ export class AgentRunner {
     }
 
     return `MCP tool not found: ${call.name}`;
+  }
+
+  private describeToolCall(call: ToolCall): string {
+    let args: any;
+    try {
+      args = JSON.parse(call.argumentsText || "{}");
+    } catch {
+      return call.argumentsText || "{}";
+    }
+
+    if (call.name === "run_terminal_command") {
+      return `command=${String(args.command || "")}`;
+    }
+
+    const path = args.path ? `path=${String(args.path)}` : "";
+    const query = args.query ? `query=${String(args.query)}` : "";
+    const name = args.name ? `name=${String(args.name)}` : "";
+
+    const detail = [path, query, name].filter(Boolean).join(" ");
+    if (detail) {
+      return detail;
+    }
+
+    const compact = JSON.stringify(args);
+    return compact.length > 180 ? `${compact.slice(0, 180)}...` : compact;
+  }
+
+  private summarizeToolResult(result: string): string {
+    const oneLine = result.replace(/\s+/g, " ").trim();
+    if (!oneLine) {
+      return "(empty result)";
+    }
+    return oneLine.length > 200 ? `${oneLine.slice(0, 200)}...` : oneLine;
   }
 }

@@ -3,7 +3,7 @@ import { AgentRunner } from "../../agent/agentRunner";
 import { SidekickConfig } from "../../core/config";
 import { LlmGateway, ProviderConfig } from "../../core/llm";
 import { collectContext, toContextPrompt } from "../../context/contextCollector";
-import { ChatMessage, ChatStore } from "./chatStore";
+import { ChatHistoryItem, ChatMessage, ChatStore } from "./chatStore";
 
 type IncomingMessage =
   | { type: "ready" }
@@ -15,7 +15,7 @@ type IncomingMessage =
 type OutgoingMessage =
   | {
       type: "history";
-      history: ChatMessage[];
+      history: ChatHistoryItem[];
       providers: ProviderConfig[];
       profileProviderId: string;
       profileModel: string;
@@ -23,6 +23,13 @@ type OutgoingMessage =
   | { type: "append"; message: ChatMessage }
   | { type: "assistant-start" }
   | { type: "assistant-delta"; delta: string }
+  | {
+      type: "tool-activity";
+      id: string;
+      phase: "start" | "end";
+      name: string;
+      detail: string;
+    }
   | { type: "assistant-end" }
   | { type: "seed"; text: string };
 
@@ -32,7 +39,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private readonly store: ChatStore;
   private readonly agentRunner: AgentRunner;
-  private history: ChatMessage[];
+  private history: ChatHistoryItem[];
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -107,11 +114,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     model?: string
   ): Promise<void> {
     const userMessage: ChatMessage = {
+      kind: "message",
       role: "user",
       content: text,
       timestamp: Date.now(),
     };
     this.history.push(userMessage);
+    void this.store.saveHistory(this.history);
     this.post({ type: "append", message: userMessage });
 
     const snapshot = await collectContext();
@@ -134,10 +143,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         role: "system" as const,
         content: contextPrompt,
       },
-      ...this.history.slice(-20).map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+      ...this.history
+        .filter((item): item is ChatMessage => item.kind === "message")
+        .slice(-20)
+        .map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
     ];
 
     let answer = "";
@@ -148,6 +160,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         answer += event.delta;
         this.post({ type: "assistant-delta", delta: event.delta });
       }
+      if (event.type === "tool_activity") {
+        this.history.push({
+          kind: "tool_activity",
+          id: event.id,
+          phase: event.phase,
+          name: event.name,
+          detail: event.detail,
+          timestamp: Date.now(),
+        });
+        void this.store.saveHistory(this.history);
+        this.post({
+          type: "tool-activity",
+          id: event.id,
+          phase: event.phase,
+          name: event.name,
+          detail: event.detail,
+        });
+      }
       if (event.type === "error") {
         this.post({
           type: "assistant-delta",
@@ -157,6 +187,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     const assistantMessage: ChatMessage = {
+      kind: "message",
       role: "assistant",
       content: answer || "(no response)",
       timestamp: Date.now(),
@@ -179,10 +210,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     const markdown = this.history
-      .map(
-        (message) =>
-          `## ${message.role === "user" ? "User" : "Assistant"}\n\n${message.content}\n`
-      )
+      .map((item) => {
+        if (item.kind === "tool_activity") {
+          return `## Tool ${item.phase === "start" ? "Running" : "Done"}: ${item.name}\n\n${item.detail}\n`;
+        }
+        return `## ${item.role === "user" ? "User" : "Assistant"}\n\n${item.content}\n`;
+      })
       .join("\n");
 
     await vscode.workspace.fs.writeFile(uri, Buffer.from(markdown, "utf8"));
@@ -254,19 +287,62 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       min-height: 0;
       overflow: auto;
       padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
     .msg {
-      margin: 0 0 10px;
-      padding: 10px 12px;
-      border: 1px solid var(--stroke);
-      border-radius: 10px;
-      background: var(--panel);
+      margin: 0;
+      padding: 0;
       line-height: 1.45;
       white-space: normal;
       overflow-wrap: anywhere;
     }
-    .msg.user { border-left: 3px solid var(--user); }
-    .msg.assistant { border-left: 3px solid var(--assistant); }
+    .msg.user {
+      align-self: flex-end;
+      max-width: 92%;
+      padding: 10px 12px;
+      border: 1px solid var(--stroke);
+      border-left: 3px solid var(--user);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+    .msg.assistant {
+      align-self: stretch;
+      max-width: 100%;
+      padding: 0;
+      border: none;
+      background: transparent;
+    }
+    .tool-msg {
+      border-left: 3px solid #eab308;
+      background: rgba(35, 29, 7, 0.35);
+      font-size: 12px;
+    }
+    .tool-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #f5d87b;
+      margin-bottom: 6px;
+    }
+    .tool-badge {
+      border: 1px solid #9f7b23;
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-size: 11px;
+      color: #f5d87b;
+    }
+    .tool-detail {
+      margin: 0;
+      padding: 6px 8px;
+      border: 1px solid #4b3a13;
+      border-radius: 6px;
+      background: rgba(9, 8, 4, 0.5);
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #d9cda4;
+    }
     .input {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -345,6 +421,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let activeProviderId = '';
     let activeModelId = '';
     let inProgress = null;
+    const toolCards = new Map();
 
     function escapeHtml(text) {
       return text
@@ -379,6 +456,52 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
       return div;
+    }
+
+    function appendToolActivity(id, phase, name, detail) {
+      let card = toolCards.get(id);
+      if (!card) {
+        const container = document.createElement('div');
+        container.className = 'msg assistant tool-msg';
+
+        const header = document.createElement('div');
+        header.className = 'tool-head';
+
+        const badge = document.createElement('span');
+        badge.className = 'tool-badge';
+
+        const title = document.createElement('span');
+        title.textContent = name;
+
+        header.appendChild(badge);
+        header.appendChild(title);
+
+        const detailBox = document.createElement('details');
+        const summary = document.createElement('summary');
+        const pre = document.createElement('pre');
+        pre.className = 'tool-detail';
+        detailBox.appendChild(summary);
+        detailBox.appendChild(pre);
+
+        container.appendChild(header);
+        container.appendChild(detailBox);
+        if (inProgress && inProgress.parentElement === messages) {
+          messages.insertBefore(container, inProgress);
+        } else {
+          messages.appendChild(container);
+        }
+
+        card = { badge, summary, pre, detailBox };
+        toolCards.set(id, card);
+      }
+
+      card.badge.textContent = phase === 'start' ? 'RUNNING' : 'DONE';
+      card.summary.textContent =
+        phase === 'start' ? 'Show operation detail' : 'Show result summary';
+      card.pre.textContent = detail || '(empty)';
+      card.detailBox.open = phase === 'start';
+
+      messages.scrollTop = messages.scrollHeight;
     }
 
     function setSelection(preferredProviderId, preferredModelId) {
@@ -483,9 +606,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const msg = event.data;
       if (msg.type === 'history') {
         messages.innerHTML = '';
+        toolCards.clear();
         providers = Array.isArray(msg.providers) ? msg.providers : [];
         for (const item of msg.history || []) {
-          append(item.role, item.content);
+          if (item.kind === 'tool_activity') {
+            appendToolActivity(item.id || item.name, item.phase, item.name, item.detail);
+          } else {
+            append(item.role, item.content);
+          }
         }
         setSelection(msg.profileProviderId || '', msg.profileModel || '');
       }
@@ -501,6 +629,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'assistant-delta' && inProgress) {
         inProgress.innerHTML += renderMarkdown(msg.delta);
         messages.scrollTop = messages.scrollHeight;
+      }
+
+      if (msg.type === 'tool-activity') {
+        appendToolActivity(msg.id || msg.name, msg.phase, msg.name, msg.detail);
       }
 
       if (msg.type === 'assistant-end') {

@@ -67,6 +67,13 @@ export interface ToolCall {
 export type StreamEvent =
   | { type: "text"; delta: string }
   | { type: "tool_call"; call: ToolCall }
+  | {
+      type: "tool_activity";
+      id: string;
+      phase: "start" | "end";
+      name: string;
+      detail: string;
+    }
   | { type: "error"; message: string }
   | { type: "done" };
 
