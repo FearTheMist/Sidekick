@@ -69,6 +69,14 @@
       {
         "command": "sidekick.openInlineLogs",
         "title": "Sidekick: Open Inline Logs"
+      },
+      {
+        "command": "sidekick.generateCommitMessage",
+        "title": "Sidekick: Generate Commit Message",
+        "icon": {
+          "light": "media/generate-commit-light.svg",
+          "dark": "media/generate-commit-dark.svg"
+        }
       }
     ],
     "viewsContainers": {
@@ -90,6 +98,13 @@
       ]
     },
     "menus": {
+      "scm/title": [
+        {
+          "command": "sidekick.generateCommitMessage",
+          "group": "navigation@40",
+          "when": "scmProvider == git"
+        }
+      ],
       "editor/context": [
         {
           "command": "sidekick.explainCode",

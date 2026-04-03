@@ -8,6 +8,7 @@ import { ChatHistoryItem, ChatMessage, ChatStore } from "./chatStore";
 type IncomingMessage =
   | { type: "ready" }
   | { type: "send"; text: string; providerId?: string; model?: string }
+  | { type: "selection"; providerId?: string; model?: string }
   | { type: "clear" }
   | { type: "export" }
   | { type: "open-settings" };
@@ -40,6 +41,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private readonly store: ChatStore;
   private readonly agentRunner: AgentRunner;
   private history: ChatHistoryItem[];
+  private selectedProviderId: string;
+  private selectedModel?: string;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -48,6 +51,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.store = new ChatStore(context);
     this.agentRunner = new AgentRunner(gateway);
     this.history = this.store.getHistory();
+    const profile = SidekickConfig.getChatProfile();
+    this.selectedProviderId = profile.providerId;
+    this.selectedModel = profile.model;
+  }
+
+  getActiveProfile(): { providerId: string; model?: string } {
+    return {
+      providerId: this.selectedProviderId,
+      model: this.selectedModel,
+    };
   }
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
@@ -73,6 +86,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         case "send": {
           await this.handleSend(raw.text, raw.providerId, raw.model);
+          break;
+        }
+        case "selection": {
+          if (raw.providerId) {
+            this.selectedProviderId = raw.providerId;
+          }
+          if (typeof raw.model === "string") {
+            this.selectedModel = raw.model;
+          }
           break;
         }
         case "clear": {
@@ -129,9 +151,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const profile = SidekickConfig.getChatProfile();
     if (providerId) {
       profile.providerId = providerId;
+      this.selectedProviderId = providerId;
     }
     if (model) {
       profile.model = model;
+      this.selectedModel = model;
     }
 
     const messages = [
@@ -516,8 +540,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         activeModelId = selected.id;
       }
 
+      emitSelection();
       updateModelButton();
       renderModelPicker();
+    }
+
+    function emitSelection() {
+      vscode.postMessage({
+        type: 'selection',
+        providerId: activeProviderId,
+        model: activeModelId
+      });
     }
 
     function updateModelButton() {
@@ -549,6 +582,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           btn.onclick = () => {
             activeProviderId = provider.id;
             activeModelId = provider.defaultModel || '';
+            emitSelection();
             updateModelButton();
             modelPicker.classList.add('hidden');
           };
@@ -562,6 +596,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             btn.onclick = () => {
               activeProviderId = provider.id;
               activeModelId = model.id;
+              emitSelection();
               updateModelButton();
               renderModelPicker();
               modelPicker.classList.add('hidden');

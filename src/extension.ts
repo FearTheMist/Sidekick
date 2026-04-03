@@ -1,9 +1,13 @@
 import * as vscode from "vscode";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import { SidekickConfig } from "./core/config";
 import { LlmGateway, ProviderConfig } from "./core/llm";
 import { ChatPanelProvider } from "./features/chat/chatPanel";
 import { SidekickInlineCompletionProvider } from "./features/inline/inlineProvider";
 import { openSettingsPanel } from "./features/settings/settingsPanel";
+
+const execAsync = promisify(exec);
 
 export function activate(context: vscode.ExtensionContext): void {
   const gateway = new LlmGateway(SidekickConfig.getProviders());
@@ -80,6 +84,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("sidekick.inlineDebugPing", async () => {
       await inlineProvider.debugPing();
       vscode.window.showInformationMessage("Inline debug ping finished.");
+    }),
+    vscode.commands.registerCommand("sidekick.generateCommitMessage", async () => {
+      await generateCommitMessage(gateway, chatPanel);
     })
   );
 }
@@ -194,4 +201,160 @@ async function pickProvider(
   );
 
   return quickPick?.provider;
+}
+
+async function generateCommitMessage(
+  gateway: LlmGateway,
+  chatPanel: ChatPanelProvider
+): Promise<void> {
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Sidekick: Generating commit message...",
+    },
+    async () => {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (!folder) {
+        vscode.window.showWarningMessage("Open a workspace folder first.");
+        return;
+      }
+
+      const providers = SidekickConfig.getProviders();
+      const selected = chatPanel.getActiveProfile();
+      const profile = {
+        ...SidekickConfig.getChatProfile(),
+        providerId: selected.providerId,
+        model: selected.model,
+      };
+
+      if (!profile.providerId || !providers.some((item) => item.id === profile.providerId)) {
+        vscode.window.showWarningMessage(
+          "Current chat provider is unavailable. Please reselect model in chat panel."
+        );
+        return;
+      }
+
+      const cwd = folder.uri.fsPath;
+
+      let staged = "";
+      let unstaged = "";
+      let recent = "";
+      try {
+        const [stagedResult, unstagedResult, recentResult] = await Promise.all([
+          execAsync("git diff --cached", { cwd, maxBuffer: 1024 * 1024 * 6 }),
+          execAsync("git diff", { cwd, maxBuffer: 1024 * 1024 * 6 }),
+          execAsync("git log -5 --oneline", { cwd, maxBuffer: 1024 * 1024 }),
+        ]);
+        staged = stagedResult.stdout || "";
+        unstaged = unstagedResult.stdout || "";
+        recent = recentResult.stdout || "";
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to read git changes: ${String(error)}`);
+        return;
+      }
+
+      if (!staged.trim() && !unstaged.trim()) {
+        vscode.window.showInformationMessage("No git changes found.");
+        return;
+      }
+
+      const hasStaged = Boolean(staged.trim());
+      const diffSection = hasStaged
+        ? ["Staged diff:", truncateForLlm(staged, 12000)]
+        : [
+            "Staged diff:",
+            "(none)",
+            "",
+            "Unstaged diff:",
+            truncateForLlm(unstaged, 12000),
+          ];
+
+      const prompt = [
+        "Generate one concise git commit message.",
+        "Requirements:",
+        "- Output only plain text commit message, no markdown",
+        "- Prefer format: type(scope): subject",
+        "- Mention intent and impact briefly",
+        "- Max 72 chars for subject, optional short body after blank line",
+        "",
+        "Recent commit style:",
+        recent,
+        "",
+        ...diffSection,
+      ].join("\n");
+
+      let text = "";
+      try {
+        for await (const event of gateway.streamChat({
+          profile,
+          messages: [{ role: "user", content: prompt }],
+        })) {
+          if (event.type === "text") {
+            text += event.delta;
+          }
+          if (event.type === "error") {
+            vscode.window.showErrorMessage(
+              `Commit message generation failed: ${event.message}`
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        vscode.window.showErrorMessage(
+          `Commit message generation failed: ${String(error)}`
+        );
+        return;
+      }
+
+      const message = sanitizeCommitMessage(text);
+      if (!message) {
+        vscode.window.showWarningMessage("Generated commit message was empty.");
+        return;
+      }
+
+      const applied = await applyToGitInputBox(message);
+      if (applied) {
+        vscode.window.showInformationMessage("Commit message generated and filled.");
+      } else {
+        await vscode.env.clipboard.writeText(message);
+        vscode.window.showInformationMessage(
+          "Commit message copied to clipboard (Git input box unavailable)."
+        );
+      }
+    }
+  );
+}
+
+function truncateForLlm(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, maxChars)}\n...[truncated]`;
+}
+
+function sanitizeCommitMessage(raw: string): string {
+  const cleaned = raw
+    .replace(/^```[\w-]*\s*/g, "")
+    .replace(/```$/g, "")
+    .trim();
+  return cleaned;
+}
+
+async function applyToGitInputBox(message: string): Promise<boolean> {
+  const gitExtension = vscode.extensions.getExtension("vscode.git");
+  if (!gitExtension) {
+    return false;
+  }
+
+  if (!gitExtension.isActive) {
+    await gitExtension.activate();
+  }
+
+  const api = gitExtension.exports?.getAPI?.(1);
+  if (!api || !Array.isArray(api.repositories) || api.repositories.length === 0) {
+    return false;
+  }
+
+  api.repositories[0].inputBox.value = message;
+  return true;
 }
