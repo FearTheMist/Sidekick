@@ -390,17 +390,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       align-items: center;
       gap: 6px;
     }
-    .thinking-dots::after {
-      content: '...';
-      display: inline-block;
-      width: 12px;
-      animation: dots 1.1s steps(4, end) infinite;
-      overflow: hidden;
-      vertical-align: bottom;
+    .thinking-dots {
+      display: inline-flex;
+      gap: 1px;
     }
-    @keyframes dots {
-      from { width: 0; }
-      to { width: 12px; }
+    .thinking-dots span {
+      opacity: 0.2;
+      animation: thinking-dot 1.2s infinite;
+    }
+    .thinking-dots span:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+    .thinking-dots span:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+    @keyframes thinking-dot {
+      0%, 20% { opacity: 0.2; }
+      50% { opacity: 1; }
+      100% { opacity: 0.2; }
     }
     .tool-msg {
       border-left: 3px solid #eab308;
@@ -724,7 +731,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       if (msg.type === 'assistant-start') {
         inProgress = append('assistant', '');
         inProgress.dataset.loading = '1';
-        inProgress.innerHTML = '<span class="thinking"><span>Sidekick is thinking</span><span class="thinking-dots"></span></span>';
+        inProgress.innerHTML = '<span class="thinking"><span>Sidekick is thinking</span><span class="thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></span>';
       }
 
       if (msg.type === 'assistant-delta' && inProgress) {
