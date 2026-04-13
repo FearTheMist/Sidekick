@@ -802,6 +802,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       border-top: 1px solid var(--stroke);
       background: rgba(9, 14, 24, 0.9);
     }
+    .input-shell {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid var(--stroke);
+      border-radius: 10px;
+      background: rgba(13, 20, 34, 0.94);
+    }
     .selection-context {
       min-height: 18px;
       color: var(--muted);
@@ -811,10 +819,18 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       display: none;
     }
     .stop-btn {
-      border-color: #6a3340;
+      min-width: 22px;
+      min-height: 22px;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border-color: transparent;
       color: #ffd5dc;
-      background: rgba(61, 14, 24, 0.9);
+      background: transparent;
       justify-self: end;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
     .stop-btn:disabled {
       opacity: 0.55;
@@ -822,15 +838,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     textarea {
       min-height: 56px;
-      max-height: 180px;
-      resize: vertical;
-      padding: 10px;
+      max-height: 300px;
+      resize: none;
+      width: 100%;
+      padding: 0;
+      border-radius: 0;
+      border: none;
+      background: transparent;
+      color: var(--text);
     }
     .model-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
+      gap: 2px;
+    }
+    .model-row button:first-child {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      text-align: left;
+      border-color: transparent;
+      background: transparent;
+      min-height: 22px;
+      line-height: 22px;
+      padding-top: 0;
+      padding-bottom: 0;
+      padding-left: 0;
+      padding-right: 0;
     }
     .model-picker {
       position: fixed;
@@ -887,10 +924,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <div id="modelPicker" class="model-picker hidden"></div>
   <div class="input">
     <div id="selectionContext" class="selection-context hidden"></div>
-    <textarea id="input" placeholder="Ask Sidekick..."></textarea>
-    <div class="model-row">
-      <button id="modelPickerBtn">Model: -</button>
-      <button id="stop" class="stop-btn" disabled>Stop</button>
+    <div class="input-shell">
+      <textarea id="input" placeholder="Ask Sidekick..."></textarea>
+      <div class="model-row">
+        <button id="modelPickerBtn">Model: -</button>
+        <button id="stop" class="stop-btn" disabled aria-label="Start">↑</button>
+      </div>
     </div>
   </div>
   <script nonce="${nonce}">
@@ -913,10 +952,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let isRunning = false;
     const toolCards = new Map();
 
+    function syncInputHeight() {
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 300) + 'px';
+      input.style.overflowY = input.scrollHeight > 300 ? 'auto' : 'hidden';
+    }
+
     function setRunState(nextRunning) {
       isRunning = nextRunning;
       stopBtn.disabled = false;
-      stopBtn.textContent = nextRunning ? 'Stop' : 'Start';
+      stopBtn.textContent = nextRunning ? '❚❚' : '↑';
+      stopBtn.setAttribute('aria-label', nextRunning ? 'Stop' : 'Start');
     }
 
     function escapeHtml(text) {
@@ -1166,11 +1212,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function updateModelButton() {
       const provider = providers.find((item) => item.id === activeProviderId);
       const model = (provider?.models || []).find((item) => item.id === activeModelId);
-      const providerName = provider ? (provider.label || provider.id) : '(no provider)';
       const modelName = model
-        ? (model.name || model.id) + ' [' + (model.endpointType || 'OPENAI') + ']'
-        : activeModelId || '(no model)';
-      modelPickerBtn.textContent = 'Model: ' + providerName + ' / ' + modelName;
+        ? (model.name || model.id)
+        : activeModelId || provider?.defaultModel || '(no model)';
+      modelPickerBtn.textContent = modelName;
     }
 
     function renderModelPicker() {
@@ -1229,6 +1274,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         model: activeModelId
       });
       input.value = '';
+      syncInputHeight();
     }
 
     input.addEventListener('keydown', (event) => {
@@ -1238,6 +1284,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       event.preventDefault();
       sendMessage();
     });
+    input.addEventListener('input', () => syncInputHeight());
 
     modelPickerBtn.onclick = () => {
       modelPicker.classList.toggle('hidden');
@@ -1345,10 +1392,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       if (msg.type === 'seed') {
         input.value = msg.text;
+        syncInputHeight();
         input.focus();
       }
     });
 
+    syncInputHeight();
     vscode.postMessage({ type: 'ready' });
   </script>
 </body>
