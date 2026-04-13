@@ -45,11 +45,34 @@ export interface ModelProfile {
 
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 
+export interface LlmTextPart {
+  type: "text";
+  text: string;
+  synthetic?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface LlmFilePart {
+  type: "file";
+  filename: string;
+  mime: string;
+  url: string;
+  synthetic?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export type LlmContentPart = LlmTextPart | LlmFilePart;
+
 export interface LlmMessage {
   role: MessageRole;
-  content: string;
+  content: string | LlmContentPart[];
   name?: string;
   toolCallId?: string;
+}
+
+export interface RawMessageBatch {
+  title: string;
+  messages: LlmMessage[];
 }
 
 export interface ToolDefinition {
@@ -65,6 +88,7 @@ export interface ToolCall {
 }
 
 export type StreamEvent =
+  | { type: "request_messages"; batch: RawMessageBatch }
   | { type: "text"; delta: string }
   | { type: "tool_call"; call: ToolCall }
   | {

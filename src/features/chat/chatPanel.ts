@@ -1,9 +1,15 @@
 import * as vscode from "vscode";
 import { AgentRunner } from "../../agent/agentRunner";
 import { SidekickConfig } from "../../core/config";
-import { LlmGateway, ProviderConfig } from "../../core/llm";
-import { collectContext, toContextPrompt } from "../../context/contextCollector";
+import { LlmGateway, LlmMessage, ProviderConfig, RawMessageBatch } from "../../core/llm";
 import {
+  collectContext,
+  getSelectedLocation,
+  toContextPrompt,
+} from "../../context/contextCollector";
+import {
+  buildHistoryId,
+  ChatMessagePart,
   ChatHistoryItem,
   ChatMessage,
   ChatSelectionState,
@@ -13,6 +19,8 @@ import {
 type IncomingMessage =
   | { type: "ready" }
   | { type: "send"; text: string; providerId?: string; model?: string }
+  | { type: "stop" }
+  | { type: "reset-to-step"; messageId: string }
   | { type: "selection"; providerId?: string; model?: string }
   | { type: "clear" }
   | { type: "export" }
@@ -26,9 +34,11 @@ type OutgoingMessage =
       profileProviderId: string;
       profileModel: string;
     }
+  | { type: "selection-context"; location: string }
   | { type: "append"; message: ChatMessage }
   | { type: "assistant-start" }
   | { type: "assistant-delta"; delta: string }
+  | { type: "assistant-finalize"; message: ChatMessage }
   | {
       type: "tool-activity";
       id: string;
@@ -41,6 +51,7 @@ type OutgoingMessage =
 
 export class ChatPanelProvider implements vscode.WebviewViewProvider {
   static readonly viewType = "sidekick.chatView";
+  private static qwenPromptCache?: string;
 
   private view?: vscode.WebviewView;
   private readonly store: ChatStore;
@@ -48,6 +59,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private history: ChatHistoryItem[];
   private selectedProviderId: string;
   private selectedModel?: string;
+  private activeRun?: AbortController;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -60,6 +72,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const saved = this.store.getSelection();
     this.selectedProviderId = saved?.providerId || profile.providerId;
     this.selectedModel = saved?.model || profile.model;
+    this.context.subscriptions.push(
+      vscode.window.onDidChangeTextEditorSelection(() => {
+        this.postSelectionContext();
+      })
+    );
+    this.context.subscriptions.push(
+      vscode.window.onDidChangeActiveTextEditor(() => {
+        this.postSelectionContext();
+      })
+    );
   }
 
   getActiveProfile(): { providerId: string; model?: string } {
@@ -86,10 +108,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       switch (raw.type) {
         case "ready": {
           this.postHistory();
+          this.postSelectionContext();
           break;
         }
         case "send": {
           await this.handleSend(raw.text, raw.providerId, raw.model);
+          break;
+        }
+        case "stop": {
+          this.activeRun?.abort();
+          break;
+        }
+        case "reset-to-step": {
+          await this.resetToStep(raw.messageId);
           break;
         }
         case "selection": {
@@ -134,17 +165,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     providerId?: string,
     model?: string
   ): Promise<void> {
+    if (this.activeRun) {
+      return;
+    }
+
     const userMessage: ChatMessage = {
+      id: buildHistoryId("message"),
       kind: "message",
       role: "user",
       content: text,
       timestamp: Date.now(),
+      parts: this.buildUserMessageParts(text),
     };
     this.history.push(userMessage);
     void this.store.saveHistory(this.history);
     this.post({ type: "append", message: userMessage });
 
-    const snapshot = await collectContext();
+    const snapshot = await collectContext(text);
     const contextPrompt = toContextPrompt(snapshot);
 
     const profile = SidekickConfig.getChatProfile();
@@ -158,10 +195,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
     await this.saveSelection();
 
-    const messages = [
+    const provider = SidekickConfig.getProviders().find(
+      (item) => item.id === profile.providerId
+    );
+    const systemPrompt = await this.buildChatSystemPrompt(provider, profile.model);
+
+    const messages: LlmMessage[] = [
       {
         role: "system" as const,
-        content: "You are Sidekick, an expert software engineering assistant.",
+        content: systemPrompt,
       },
       {
         role: "system" as const,
@@ -172,53 +214,93 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         .slice(-20)
         .map((message) => ({
           role: message.role,
-          content: message.content,
+          content:
+            message.role === "user" && Array.isArray(message.parts) && message.parts.length > 0
+              ? message.parts.map((part) => ({ ...part }))
+              : message.content,
         })),
     ];
 
     let answer = "";
+    let rawMessageBatches: RawMessageBatch[] = [];
+    const workspaceMutations: import("../../agent/builtinTools").WorkspaceMutation[] = [];
+    const abortController = new AbortController();
+    this.activeRun = abortController;
     this.post({ type: "assistant-start" });
 
-    for await (const event of this.agentRunner.run(messages, profile)) {
-      if (event.type === "text") {
-        answer += event.delta;
-        this.post({ type: "assistant-delta", delta: event.delta });
+    try {
+      for await (const event of this.agentRunner.run(
+        messages,
+        profile,
+        abortController.signal,
+        workspaceMutations
+      )) {
+        if (event.type === "request_messages") {
+          rawMessageBatches = [event.batch];
+        }
+        if (event.type === "text") {
+          answer += event.delta;
+          this.post({ type: "assistant-delta", delta: event.delta });
+        }
+        if (event.type === "tool_activity") {
+          this.history.push({
+            kind: "tool_activity",
+            id: event.id,
+            phase: event.phase,
+            name: event.name,
+            detail: event.detail,
+            timestamp: Date.now(),
+          });
+          void this.store.saveHistory(this.history);
+          this.post({
+            type: "tool-activity",
+            id: event.id,
+            phase: event.phase,
+            name: event.name,
+            detail: event.detail,
+          });
+        }
+        if (event.type === "error") {
+          const errorText = `\n[error] ${event.message}`;
+          answer += errorText;
+          this.post({
+            type: "assistant-delta",
+            delta: errorText,
+          });
+        }
       }
-      if (event.type === "tool_activity") {
-        this.history.push({
-          kind: "tool_activity",
-          id: event.id,
-          phase: event.phase,
-          name: event.name,
-          detail: event.detail,
-          timestamp: Date.now(),
-        });
-        void this.store.saveHistory(this.history);
-        this.post({
-          type: "tool-activity",
-          id: event.id,
-          phase: event.phase,
-          name: event.name,
-          detail: event.detail,
-        });
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        const errorText = `\n[error] ${error instanceof Error ? error.message : String(error)}`;
+        answer += errorText;
+        this.post({ type: "assistant-delta", delta: errorText });
       }
-      if (event.type === "error") {
-        this.post({
-          type: "assistant-delta",
-          delta: `\n[error] ${event.message}`,
-        });
-      }
+    } finally {
+      this.activeRun = undefined;
+    }
+
+    const finalContent =
+      answer || (abortController.signal.aborted ? "(stopped)" : "(no response)");
+
+    userMessage.workspaceMutations = workspaceMutations;
+
+    if (!answer) {
+      this.post({ type: "assistant-delta", delta: finalContent });
     }
 
     const assistantMessage: ChatMessage = {
+      id: buildHistoryId("message"),
       kind: "message",
       role: "assistant",
-      content: answer || "(no response)",
+      content: finalContent,
       timestamp: Date.now(),
+      rawMessages: rawMessageBatches[0]?.messages || messages.map((message) => ({ ...message })),
+      rawMessageBatches,
     };
 
     this.history.push(assistantMessage);
     await this.store.saveHistory(this.history);
+    this.post({ type: "assistant-finalize", message: assistantMessage });
     this.post({ type: "assistant-end" });
   }
 
@@ -250,6 +332,54 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage(message);
   }
 
+  private async resetToStep(messageId: string): Promise<void> {
+    const targetIndex = this.history.findIndex(
+      (item) => item.kind === "message" && item.id === messageId && item.role === "user"
+    );
+    if (targetIndex === -1) {
+      return;
+    }
+
+    const target = this.history[targetIndex] as ChatMessage;
+    const rollback = this.history
+      .slice(targetIndex)
+      .filter(
+        (item): item is ChatMessage => item.kind === "message" && item.role === "user"
+      )
+      .flatMap((item) => item.workspaceMutations || []);
+
+    await this.rollbackWorkspaceMutations(rollback);
+    this.history = this.history.slice(0, targetIndex);
+    await this.store.saveHistory(this.history);
+    this.postHistory();
+    this.post({ type: "seed", text: target.content });
+  }
+
+  private async rollbackWorkspaceMutations(mutations: import("../../agent/builtinTools").WorkspaceMutation[]): Promise<void> {
+    for (let index = mutations.length - 1; index >= 0; index -= 1) {
+      const mutation = mutations[index];
+      const uri = vscode.Uri.file(mutation.path);
+
+      if (!mutation.existedBefore) {
+        try {
+          await vscode.workspace.fs.delete(uri, { recursive: true, useTrash: false });
+        } catch {
+          continue;
+        }
+        continue;
+      }
+
+      if (typeof mutation.previousContent !== "string") {
+        continue;
+      }
+
+      await vscode.workspace.fs.writeFile(
+        uri,
+        Buffer.from(mutation.previousContent, "utf8")
+      );
+    }
+  }
+
   private postHistory(): void {
     const providers = SidekickConfig.getProviders();
     this.ensureValidSelection(providers);
@@ -260,6 +390,105 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       profileProviderId: this.selectedProviderId,
       profileModel: this.selectedModel || "",
     });
+  }
+
+  private postSelectionContext(): void {
+    this.post({
+      type: "selection-context",
+      location: getSelectedLocation(vscode.window.activeTextEditor),
+    });
+  }
+
+  private async buildChatSystemPrompt(
+    provider: ProviderConfig | undefined,
+    model: string | undefined
+  ): Promise<string> {
+    const base = [
+      "You are Sidekick, an expert software engineering assistant.",
+      "Use first-principles reasoning from the user's real goal, not from surface wording alone.",
+      "Keep the solution on the shortest correct path. Do not add compatibility layers, fallback logic, or extra designs unless the user explicitly asks for them.",
+      "Ensure the full logic is correct end to end before answering or acting.",
+    ].join(" ");
+
+    if (detectVendor(provider, model) !== "qwen") {
+      return base;
+    }
+
+    if (ChatPanelProvider.qwenPromptCache) {
+      return ChatPanelProvider.qwenPromptCache;
+    }
+
+    try {
+      const uri = vscode.Uri.joinPath(this.context.extensionUri, "src", "prompt", "qwen.txt");
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      const prompt = Buffer.from(bytes).toString("utf8").trim();
+      if (prompt) {
+        ChatPanelProvider.qwenPromptCache = prompt;
+        return prompt;
+      }
+    } catch {
+      // Fall through to base prompt if the prompt file cannot be read.
+    }
+
+    return base;
+  }
+
+  private buildUserMessageParts(text: string): ChatMessagePart[] | undefined {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.selection.isEmpty) {
+      return text
+        ? [
+            {
+              id: buildHistoryId("part"),
+              type: "text",
+              text,
+            },
+          ]
+        : undefined;
+    }
+
+    const relativePath = vscode.workspace.asRelativePath(editor.document.uri);
+    const startLine = editor.selection.start.line + 1;
+    const endLine = editor.selection.end.line + 1;
+    const startChar = editor.selection.start.character;
+    const endChar = editor.selection.end.character;
+    const preview = editor.document.getText(editor.selection).slice(0, 400);
+    const fileUrl = `${editor.document.uri.toString()}?start=${startLine}&end=${endLine}`;
+
+    return [
+      {
+        id: buildHistoryId("part"),
+        type: "text",
+        text,
+      },
+      {
+        id: buildHistoryId("part"),
+        type: "file",
+        mime: "text/plain",
+        filename: relativePath,
+        url: fileUrl,
+      },
+      {
+        id: buildHistoryId("part"),
+        type: "text",
+        synthetic: true,
+        text: `The user made the following comment regarding lines ${startLine} through ${endLine} of ${relativePath}: ${text}`,
+        metadata: {
+          opencodeComment: {
+            path: relativePath,
+            selection: {
+              startLine,
+              endLine,
+              startChar,
+              endChar,
+            },
+            comment: text,
+            preview,
+            origin: "file",
+          },
+        },
+      },
+    ];
   }
 
   private ensureValidSelection(providers: ProviderConfig[]): void {
@@ -438,13 +667,158 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       word-break: break-word;
       color: #d9cda4;
     }
+    .msg-actions {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+    }
+    .msg-action {
+      min-height: 28px;
+      padding: 4px 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .raw-trigger {
+      min-height: 28px;
+      padding: 4px 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .drawer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 12, 0.42);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 140ms ease;
+      z-index: 40;
+    }
+    .drawer-backdrop.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .raw-drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: min(520px, 92vw);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--stroke);
+      background: rgba(8, 14, 24, 0.98);
+      box-shadow: -18px 0 40px rgba(0, 0, 0, 0.35);
+      transform: translateX(100%);
+      transition: transform 160ms ease;
+      z-index: 50;
+    }
+    .raw-drawer.open {
+      transform: translateX(0);
+    }
+    .raw-drawer-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px;
+      border-bottom: 1px solid var(--stroke);
+    }
+    .raw-drawer-title {
+      min-width: 0;
+    }
+    .raw-drawer-title strong {
+      display: block;
+      font-size: 13px;
+    }
+    .raw-drawer-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .raw-drawer-close {
+      min-width: 34px;
+    }
+    .raw-drawer-body {
+      flex: 1;
+      overflow: auto;
+      padding: 12px;
+    }
+    .raw-box {
+      border: 1px solid #2c415b;
+      border-radius: 8px;
+      background: rgba(8, 16, 27, 0.78);
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .raw-box summary {
+      cursor: pointer;
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      user-select: none;
+    }
+    .raw-item {
+      border-top: 1px solid #223247;
+    }
+    .raw-item summary {
+      cursor: pointer;
+      padding: 8px 10px;
+      list-style: none;
+    }
+    .raw-item summary::-webkit-details-marker {
+      display: none;
+    }
+    .raw-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .raw-item-body {
+      padding: 0 10px 10px;
+    }
+    .raw-tag {
+      border: 1px solid #35506d;
+      border-radius: 999px;
+      padding: 1px 7px;
+      background: rgba(20, 34, 52, 0.8);
+    }
+    .raw-content {
+      margin: 0;
+      padding: 8px;
+      border: 1px solid #23364d;
+      border-radius: 6px;
+      background: #08101b;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+    }
     .input {
       display: grid;
-      grid-template-columns: 1fr auto;
       gap: 8px;
       padding: 10px;
       border-top: 1px solid var(--stroke);
       background: rgba(9, 14, 24, 0.9);
+    }
+    .selection-context {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .selection-context.hidden {
+      display: none;
+    }
+    .stop-btn {
+      border-color: #6a3340;
+      color: #ffd5dc;
+      background: rgba(61, 14, 24, 0.9);
+      justify-self: end;
+    }
+    .stop-btn:disabled {
+      opacity: 0.55;
+      cursor: default;
     }
     textarea {
       min-height: 56px;
@@ -453,9 +827,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       padding: 10px;
     }
     .model-row {
-      grid-column: 1 / -1;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 8px;
     }
     .model-picker {
@@ -499,11 +873,24 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     <button id="settings">Settings</button>
   </div>
   <div id="messages"></div>
+  <div id="drawerBackdrop" class="drawer-backdrop"></div>
+  <aside id="rawDrawer" class="raw-drawer" aria-hidden="true">
+    <div class="raw-drawer-head">
+      <div class="raw-drawer-title">
+        <strong>Raw Messages</strong>
+        <span id="rawDrawerMeta"></span>
+      </div>
+      <button id="rawDrawerClose" class="raw-drawer-close">Close</button>
+    </div>
+    <div id="rawDrawerBody" class="raw-drawer-body"></div>
+  </aside>
   <div id="modelPicker" class="model-picker hidden"></div>
   <div class="input">
+    <div id="selectionContext" class="selection-context hidden"></div>
     <textarea id="input" placeholder="Ask Sidekick..."></textarea>
     <div class="model-row">
       <button id="modelPickerBtn">Model: -</button>
+      <button id="stop" class="stop-btn" disabled>Stop</button>
     </div>
   </div>
   <script nonce="${nonce}">
@@ -512,11 +899,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const modelPicker = document.getElementById('modelPicker');
     const modelPickerBtn = document.getElementById('modelPickerBtn');
     const input = document.getElementById('input');
+    const stopBtn = document.getElementById('stop');
+    const selectionContext = document.getElementById('selectionContext');
+    const rawDrawer = document.getElementById('rawDrawer');
+    const rawDrawerBody = document.getElementById('rawDrawerBody');
+    const rawDrawerMeta = document.getElementById('rawDrawerMeta');
+    const rawDrawerClose = document.getElementById('rawDrawerClose');
+    const drawerBackdrop = document.getElementById('drawerBackdrop');
     let providers = [];
     let activeProviderId = '';
     let activeModelId = '';
     let inProgress = null;
+    let isRunning = false;
     const toolCards = new Map();
+
+    function setRunState(nextRunning) {
+      isRunning = nextRunning;
+      stopBtn.disabled = false;
+      stopBtn.textContent = nextRunning ? 'Stop' : 'Start';
+    }
 
     function escapeHtml(text) {
       return text
@@ -544,10 +945,148 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         .replace(new RegExp('\\\\n', 'g'), '<br/>');
     }
 
-    function append(role, content) {
+    function normalizeRawBatches(rawMessageBatches, rawMessages) {
+      if (Array.isArray(rawMessageBatches) && rawMessageBatches.length > 0) {
+        return rawMessageBatches;
+      }
+      if (Array.isArray(rawMessages) && rawMessages.length > 0) {
+        return [{ title: 'Initial request', messages: rawMessages }];
+      }
+      return [];
+    }
+
+    function renderMessageParts(parts) {
+      if (!Array.isArray(parts) || parts.length === 0) {
+        return '';
+      }
+
+      return parts.map((part, index) => {
+        const meta = [
+          '<span class="raw-tag">#' + (index + 1) + '</span>',
+          '<span class="raw-tag">' + escapeHtml(part.type || '') + '</span>'
+        ];
+        if (part.synthetic) {
+          meta.push('<span class="raw-tag">synthetic</span>');
+        }
+        if (part.type === 'file') {
+          meta.push('<span class="raw-tag">' + escapeHtml(part.filename || '') + '</span>');
+          return '<details class="raw-box" open><summary>File Part</summary><div class="raw-item"><div class="raw-meta">' + meta.join('') + '</div><pre class="raw-content">' + escapeHtml(JSON.stringify({ filename: part.filename, mime: part.mime, url: part.url, metadata: part.metadata || null }, null, 2)) + '</pre></div></details>';
+        }
+        return '<details class="raw-box" open><summary>Text Part</summary><div class="raw-item"><div class="raw-meta">' + meta.join('') + '</div><pre class="raw-content">' + escapeHtml(part.text || '') + '</pre></div></details>';
+      }).join('');
+    }
+
+    function renderRawMessages(rawMessageBatches, rawMessages) {
+      const batches = normalizeRawBatches(rawMessageBatches, rawMessages);
+      if (batches.length === 0) {
+        return '';
+      }
+
+      return batches.map((batch) => {
+        const items = batch.messages.map((message, index) => {
+          const meta = [
+            '<span class="raw-tag">#' + (index + 1) + '</span>',
+            '<span class="raw-tag">' + escapeHtml(message.role || '') + '</span>'
+          ];
+          if (message.name) {
+            meta.push('<span class="raw-tag">name: ' + escapeHtml(message.name) + '</span>');
+          }
+          if (message.toolCallId) {
+            meta.push('<span class="raw-tag">toolCallId: ' + escapeHtml(message.toolCallId) + '</span>');
+          }
+          const content = Array.isArray(message.content)
+            ? JSON.stringify(message.content, null, 2)
+            : (message.content || '');
+          return '<details class="raw-item"><summary><div class="raw-meta">' + meta.join('') + '</div></summary><div class="raw-item-body"><pre class="raw-content">' + escapeHtml(content) + '</pre></div></details>';
+        }).join('');
+
+        const summary = batches.length === 1
+          ? 'Raw Messages (' + batch.messages.length + ')'
+          : escapeHtml(batch.title) + ' (' + batch.messages.length + ')';
+        return '<details class="raw-box" open><summary>' + summary + '</summary>' + items + '</details>';
+      }).join('');
+    }
+
+    function openRawDrawer(role, rawMessageBatches, rawMessages, parts) {
+      const batches = normalizeRawBatches(rawMessageBatches, rawMessages);
+      rawDrawerBody.innerHTML = renderMessageParts(parts) + renderRawMessages(rawMessageBatches, rawMessages);
+      const total = batches.reduce((count, batch) => count + batch.messages.length, 0);
+      rawDrawerMeta.textContent = role + ' message, ' + (Array.isArray(parts) ? parts.length : 0) + ' part' + ((Array.isArray(parts) ? parts.length : 0) === 1 ? '' : 's') + ', ' + total + ' item' + (total === 1 ? '' : 's');
+      rawDrawer.classList.add('open');
+      rawDrawer.setAttribute('aria-hidden', 'false');
+      drawerBackdrop.classList.add('open');
+    }
+
+    function closeRawDrawer() {
+      rawDrawer.classList.remove('open');
+      rawDrawer.setAttribute('aria-hidden', 'true');
+      drawerBackdrop.classList.remove('open');
+    }
+
+    function attachMessageActions(container, role, content, rawMessageBatches, rawMessages, messageId, parts) {
+      const existingActions = container.querySelectorAll('.msg-actions');
+      existingActions.forEach((node) => node.remove());
+
+      if (role === 'user' && messageId) {
+        const actions = document.createElement('div');
+        actions.className = 'msg-actions';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'msg-action';
+        copyBtn.textContent = 'Copy';
+        copyBtn.onclick = () => copyText(content);
+
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'msg-action';
+        resetBtn.textContent = 'Reset to Here';
+        resetBtn.onclick = () => vscode.postMessage({ type: 'reset-to-step', messageId });
+
+        actions.appendChild(copyBtn);
+        actions.appendChild(resetBtn);
+        if (Array.isArray(parts) && parts.length > 0) {
+          const partsBtn = document.createElement('button');
+          partsBtn.className = 'msg-action';
+          partsBtn.textContent = 'Parts (' + parts.length + ')';
+          partsBtn.onclick = () => openRawDrawer(role, rawMessageBatches, rawMessages, parts);
+          actions.appendChild(partsBtn);
+        }
+        container.appendChild(actions);
+      }
+
+      const batches = normalizeRawBatches(rawMessageBatches, rawMessages);
+      if (batches.length > 0) {
+        const actions = document.createElement('div');
+        actions.className = 'msg-actions';
+
+        const button = document.createElement('button');
+        button.className = 'msg-action raw-trigger';
+        button.textContent = 'Raw Messages';
+        button.onclick = () => openRawDrawer(role, rawMessageBatches, rawMessages, parts);
+
+        actions.appendChild(button);
+        container.appendChild(actions);
+      }
+    }
+
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const input = document.createElement('textarea');
+      input.value = text;
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      input.remove();
+    }
+
+    function append(role, content, rawMessageBatches, rawMessages, messageId, parts) {
       const div = document.createElement('div');
       div.className = 'msg ' + role;
       div.innerHTML = renderMarkdown(content);
+      attachMessageActions(div, role, content, rawMessageBatches, rawMessages, messageId, parts);
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
       return div;
@@ -682,7 +1221,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     function sendMessage() {
       const text = input.value.trim();
-      if (!text) return;
+      if (!text || isRunning) return;
       vscode.postMessage({
         type: 'send',
         text,
@@ -707,6 +1246,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     document.getElementById('clear').onclick = () => vscode.postMessage({ type: 'clear' });
     document.getElementById('export').onclick = () => vscode.postMessage({ type: 'export' });
     document.getElementById('settings').onclick = () => vscode.postMessage({ type: 'open-settings' });
+    stopBtn.onclick = () => {
+      if (isRunning) {
+        vscode.postMessage({ type: 'stop' });
+        return;
+      }
+      sendMessage();
+    };
+    rawDrawerClose.onclick = () => closeRawDrawer();
+    drawerBackdrop.onclick = () => closeRawDrawer();
+
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        closeRawDrawer();
+      }
+    });
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
@@ -715,23 +1269,48 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         toolCards.clear();
         providers = Array.isArray(msg.providers) ? msg.providers : [];
         for (const item of msg.history || []) {
-          if (item.kind === 'tool_activity') {
-            appendToolActivity(item.id || item.name, item.phase, item.name, item.detail);
-          } else {
-            append(item.role, item.content);
-          }
+        if (item.kind === 'tool_activity') {
+          appendToolActivity(item.id || item.name, item.phase, item.name, item.detail);
+        } else {
+          append(
+            item.role,
+            item.content,
+            item.rawMessageBatches,
+            item.rawMessages,
+            item.id,
+            item.parts
+          );
         }
+      }
         setSelection(msg.profileProviderId || '', msg.profileModel || '');
       }
 
+      if (msg.type === 'selection-context') {
+        if (msg.location) {
+          selectionContext.textContent = 'Selected: ' + msg.location;
+          selectionContext.classList.remove('hidden');
+        } else {
+          selectionContext.textContent = '';
+          selectionContext.classList.add('hidden');
+        }
+      }
+
       if (msg.type === 'append') {
-        append(msg.message.role, msg.message.content);
+        append(
+          msg.message.role,
+          msg.message.content,
+          msg.message.rawMessageBatches,
+          msg.message.rawMessages,
+          msg.message.id,
+          msg.message.parts
+        );
       }
 
       if (msg.type === 'assistant-start') {
         inProgress = append('assistant', '');
         inProgress.dataset.loading = '1';
         inProgress.innerHTML = '<span class="thinking"><span>Sidekick is thinking</span><span class="thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></span>';
+        setRunState(true);
       }
 
       if (msg.type === 'assistant-delta' && inProgress) {
@@ -743,12 +1322,25 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         messages.scrollTop = messages.scrollHeight;
       }
 
+      if (msg.type === 'assistant-finalize' && inProgress) {
+        attachMessageActions(
+          inProgress,
+          msg.message.role,
+          msg.message.content,
+          msg.message.rawMessageBatches,
+          msg.message.rawMessages,
+          msg.message.id,
+          msg.message.parts
+        );
+      }
+
       if (msg.type === 'tool-activity') {
         appendToolActivity(msg.id || msg.name, msg.phase, msg.name, msg.detail);
       }
 
       if (msg.type === 'assistant-end') {
         inProgress = null;
+        setRunState(false);
       }
 
       if (msg.type === 'seed') {
@@ -762,4 +1354,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+function detectVendor(
+  provider: ProviderConfig | undefined,
+  model: string | undefined
+): "openai" | "glm" | "qwen" | "other" {
+  if (!provider) {
+    return "other";
+  }
+
+  const joined = [provider.id, provider.label, provider.baseUrl, model || ""]
+    .join(" ")
+    .toLowerCase();
+
+  if (joined.includes("zhipu") || joined.includes("glm")) {
+    return "glm";
+  }
+  if (joined.includes("qwen") || joined.includes("dashscope")) {
+    return "qwen";
+  }
+  if (joined.includes("openai")) {
+    return "openai";
+  }
+  return "other";
 }

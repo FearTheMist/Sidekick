@@ -1,4 +1,5 @@
 import {
+  LlmContentPart,
   LlmMessage,
   ModelEndpointType,
   OpenAiCompatibleMode,
@@ -167,11 +168,7 @@ export class LlmGateway {
     const body: Record<string, unknown> = {
       model: request.model,
       stream: true,
-      messages: request.messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        ...(message.name ? { name: message.name } : {}),
-      })),
+      messages: request.messages.map((message) => this.toOpenAiChatMessage(message)),
       ...(request.provider.body || {}),
       ...(request.extraBody || {}),
     };
@@ -268,10 +265,7 @@ export class LlmGateway {
     const body: Record<string, unknown> = {
       model: request.model,
       stream: true,
-      input: request.messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+      input: request.messages.map((message) => this.toOpenAiResponsesInput(message)),
       ...(request.provider.body || {}),
       ...(request.extraBody || {}),
     };
@@ -383,16 +377,19 @@ export class LlmGateway {
     request: ResolvedRequest
   ): AsyncGenerator<StreamEvent> {
     const endpoint = this.buildUrl(request.provider.baseUrl, "/messages");
+    const anthropicInput = this.buildAnthropicInput(request.messages);
     const body: Record<string, unknown> = {
       model: request.model,
       stream: true,
       max_tokens: request.maxTokens ?? 2048,
-      messages: request.messages
-        .filter((message) => message.role === "user" || message.role === "assistant")
-        .map((message) => ({ role: message.role, content: message.content })),
+      messages: anthropicInput.messages,
       ...(request.provider.body || {}),
       ...(request.extraBody || {}),
     };
+
+    if (anthropicInput.system) {
+      body.system = anthropicInput.system;
+    }
 
     if (request.tools?.length) {
       body.tools = request.tools.map((tool) => ({
@@ -502,5 +499,168 @@ export class LlmGateway {
       throw new Error("Provider baseUrl is required");
     }
     return `${baseUrl.replace(/\/$/, "")}${path}`;
+  }
+
+  private buildAnthropicInput(messages: LlmMessage[]): {
+    system?: string;
+    messages: Array<{
+      role: "user" | "assistant";
+      content:
+        | string
+        | Array<
+            | { type: "text"; text: string }
+            | { type: "tool_result"; tool_use_id: string; content: string }
+          >;
+    }>;
+  } {
+    const systemParts: string[] = [];
+    const output: Array<{
+      role: "user" | "assistant";
+      content:
+        | string
+        | Array<
+            | { type: "text"; text: string }
+            | { type: "tool_result"; tool_use_id: string; content: string }
+          >;
+    }> = [];
+
+    for (let index = 0; index < messages.length; index += 1) {
+      const message = messages[index];
+
+      if (message.role === "system") {
+        const systemText = this.contentToPlainText(message.content);
+        if (systemText) {
+          systemParts.push(systemText);
+        }
+        continue;
+      }
+
+      if (message.role === "tool") {
+        if (!message.toolCallId) {
+          continue;
+        }
+
+        const previous = output[output.length - 1];
+        const toolResult = {
+          type: "tool_result" as const,
+          tool_use_id: message.toolCallId,
+          content: this.contentToPlainText(message.content),
+        };
+
+        if (previous?.role === "user" && Array.isArray(previous.content)) {
+          previous.content.push(toolResult);
+        } else {
+          output.push({
+            role: "user",
+            content: [toolResult],
+          });
+        }
+        continue;
+      }
+
+      if (
+        message.role === "assistant" &&
+        this.contentToPlainText(message.content).startsWith("Calling tool ") &&
+        messages[index + 1]?.role === "tool"
+      ) {
+        continue;
+      }
+
+      output.push({
+        role: message.role,
+        content: this.toAnthropicContent(message.content),
+      });
+    }
+
+    return {
+      system: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+      messages: output,
+    };
+  }
+
+  private toOpenAiChatMessage(message: LlmMessage): Record<string, unknown> {
+    return {
+      role: message.role,
+      content: this.toOpenAiChatContent(message.content),
+      ...(message.name ? { name: message.name } : {}),
+    };
+  }
+
+  private toOpenAiChatContent(
+    content: LlmMessage["content"]
+  ): string | Array<{ type: "text"; text: string }> {
+    if (typeof content === "string") {
+      return content;
+    }
+    if (content.length === 1 && content[0]?.type === "text") {
+      return content[0].text;
+    }
+    return this.normalizeContentParts(content).map((part) => ({
+      type: "text" as const,
+      text: this.partToModelText(part),
+    }));
+  }
+
+  private toOpenAiResponsesInput(message: LlmMessage): Record<string, unknown> {
+    if (typeof message.content === "string") {
+      return {
+        role: message.role,
+        content: message.content,
+      };
+    }
+
+    return {
+      role: message.role,
+      content: this.normalizeContentParts(message.content).map((part) => ({
+        type: "input_text" as const,
+        text: this.partToModelText(part),
+      })),
+    };
+  }
+
+  private toAnthropicContent(
+    content: LlmMessage["content"]
+  ): string | Array<{ type: "text"; text: string }> {
+    if (typeof content === "string") {
+      return content;
+    }
+    return this.normalizeContentParts(content).map((part) => ({
+      type: "text" as const,
+      text: this.partToModelText(part),
+    }));
+  }
+
+  private contentToPlainText(content: LlmMessage["content"]): string {
+    if (typeof content === "string") {
+      return content;
+    }
+    return this.normalizeContentParts(content)
+      .map((part) => this.partToModelText(part))
+      .join("\n\n");
+  }
+
+  private normalizeContentParts(content: LlmContentPart[]): LlmContentPart[] {
+    return content.filter(Boolean);
+  }
+
+  private partToModelText(part: LlmContentPart): string {
+    if (part.type === "text") {
+      return part.text;
+    }
+
+    const preview =
+      typeof part.metadata?.preview === "string"
+        ? String(part.metadata.preview)
+        : "";
+    return [
+      "<file_part>",
+      `filename: ${part.filename}`,
+      `mime: ${part.mime}`,
+      `url: ${part.url}`,
+      preview ? `preview:\n${preview}` : "",
+      "</file_part>",
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
 }

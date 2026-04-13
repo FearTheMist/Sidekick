@@ -3,11 +3,12 @@ import {
   LlmGateway,
   LlmMessage,
   ModelProfile,
+  RawMessageBatch,
   StreamEvent,
   ToolCall,
   ToolDefinition,
 } from "../core/llm";
-import { createBuiltinToolRuntime } from "./builtinTools";
+import { createBuiltinToolRuntime, WorkspaceMutation } from "./builtinTools";
 import { McpClient } from "./mcpClient";
 import { ToolAuthorizationGate } from "./toolAuth";
 
@@ -21,9 +22,12 @@ export class AgentRunner {
   async *run(
     messages: LlmMessage[],
     overrideProfile?: Partial<ModelProfile>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    workspaceMutations?: WorkspaceMutation[]
   ): AsyncGenerator<StreamEvent> {
-    const runtime = createBuiltinToolRuntime(this.authGate);
+    const runtime = createBuiltinToolRuntime(this.authGate, {
+      mutations: workspaceMutations || [],
+    });
     const mcpClients = await this.startMcpClients();
     const mcpTools = await this.collectMcpTools(mcpClients);
     const tools = [...runtime.definitions, ...mcpTools];
@@ -32,12 +36,21 @@ export class AgentRunner {
 
     try {
       for (let step = 0; step < MAX_AGENT_STEPS; step += 1) {
+        if (signal?.aborted) {
+          return;
+        }
+
         const profile = {
           ...SidekickConfig.getAgentProfile(),
           ...(overrideProfile || {}),
         };
 
         const toolCalls: ToolCall[] = [];
+
+        yield {
+          type: "request_messages",
+          batch: this.buildRequestBatch(step, workingMessages),
+        };
 
         for await (const event of this.gateway.streamChat({
           profile,
@@ -57,6 +70,10 @@ export class AgentRunner {
         }
 
         for (const call of toolCalls) {
+          if (signal?.aborted) {
+            return;
+          }
+
           yield {
             type: "tool_activity",
             id: call.id,
@@ -87,6 +104,10 @@ export class AgentRunner {
             name: call.name,
             toolCallId: call.id,
           });
+
+          if (signal?.aborted) {
+            return;
+          }
         }
       }
     } finally {
@@ -176,5 +197,12 @@ export class AgentRunner {
       return "(empty result)";
     }
     return oneLine.length > 200 ? `${oneLine.slice(0, 200)}...` : oneLine;
+  }
+
+  private buildRequestBatch(step: number, messages: LlmMessage[]): RawMessageBatch {
+    return {
+      title: step === 0 ? "Initial request" : `Round ${step + 1}`,
+      messages: messages.map((message) => ({ ...message })),
+    };
   }
 }
