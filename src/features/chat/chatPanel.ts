@@ -598,17 +598,45 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       box-shadow: var(--button-shadow);
       transition: opacity 140ms ease;
     }
-    .toolbar button {
-      min-height: 28px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border-color: rgba(255, 255, 255, 0.08);
-      background: rgba(255, 255, 255, 0.03);
-      color: var(--muted);
-      font-size: 12px;
-    }
     .toolbar button:hover {
       color: var(--text);
+    }
+    .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      min-width: 32px;
+      height: 32px;
+      min-height: 32px;
+      padding: 0;
+      border: none;
+      border-radius: 10px;
+      background: transparent;
+      box-shadow: none;
+      color: var(--muted);
+    }
+    .icon-button:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .msg-action svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     button:hover { opacity: 0.78; }
     button:focus, textarea:focus, input:focus, select:focus {
@@ -623,7 +651,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       padding: 16px 12px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
     }
     .msg {
       margin: 0;
@@ -632,12 +659,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       white-space: normal;
       overflow-wrap: anywhere;
     }
-    .msg.user {
+    .msg-wrap.user {
       align-self: flex-end;
       max-width: 92%;
-      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+    .msg.user {
+      padding: 8px;
       border: 1px solid var(--stroke-soft);
-      border-radius: 16px;
+      border-radius: 8px;
       background: rgba(16, 17, 17, 0.9);
       box-shadow: var(--ring);
     }
@@ -712,19 +744,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       gap: 8px;
       flex-wrap: wrap;
     }
+    .msg-wrap.user .msg-actions {
+      justify-content: flex-end;
+    }
     .msg-action {
-      min-height: 28px;
-      padding: 4px 8px;
+      width: 16px;
+      min-width: 16px;
+      height: 16px;
+      min-height: 16px;
+      padding: 0;
       color: var(--muted);
-      font-size: 12px;
+      border: none;
       border-radius: 999px;
-      background: rgba(255, 255, 255, 0.03);
+      background: transparent;
+      box-shadow: none;
     }
     .raw-trigger {
-      min-height: 28px;
-      padding: 4px 8px;
       color: var(--muted);
-      font-size: 12px;
     }
     .drawer-backdrop {
       position: fixed;
@@ -777,7 +813,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       font-size: 12px;
     }
     .raw-drawer-close {
-      min-width: 34px;
+      flex: none;
     }
     .raw-drawer-body {
       flex: 1;
@@ -962,9 +998,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <div class="toolbar">
-    <button id="clear">Clear</button>
-    <button id="export">Export</button>
-    <button id="settings">Settings</button>
+    <button id="clear" class="icon-button" type="button" aria-label="Clear chat" title="Clear chat"></button>
+    <button id="export" class="icon-button" type="button" aria-label="Export chat" title="Export chat"></button>
+    <button id="settings" class="icon-button" type="button" aria-label="Open settings" title="Open settings"></button>
   </div>
   <div id="messages"></div>
   <div id="drawerBackdrop" class="drawer-backdrop"></div>
@@ -974,7 +1010,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         <strong>Raw Messages</strong>
         <span id="rawDrawerMeta"></span>
       </div>
-      <button id="rawDrawerClose" class="raw-drawer-close">Close</button>
+      <button id="rawDrawerClose" class="raw-drawer-close icon-button" type="button" aria-label="Close raw messages" title="Close raw messages"></button>
     </div>
     <div id="rawDrawerBody" class="raw-drawer-body"></div>
   </aside>
@@ -1002,12 +1038,28 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const rawDrawerMeta = document.getElementById('rawDrawerMeta');
     const rawDrawerClose = document.getElementById('rawDrawerClose');
     const drawerBackdrop = document.getElementById('drawerBackdrop');
+    const icons = {
+      clear: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>',
+      export: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="M8 11l4 4 4-4"></path><path d="M4 21h16"></path></svg>',
+      settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1z"></path></svg>',
+      close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18"></path><path d="M6 6l12 12"></path></svg>',
+      copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
+      reset: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 3v6h6"></path></svg>',
+      parts: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4-8 4-8-4 8-4Z"></path><path d="M4 12l8 4 8-4"></path><path d="M4 17l8 4 8-4"></path></svg>',
+      raw: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9L4 12l4 3"></path><path d="M16 9l4 3-4 3"></path><path d="M14 5l-4 14"></path></svg>'
+    };
     let providers = [];
     let activeProviderId = '';
     let activeModelId = '';
     let inProgress = null;
     let isRunning = false;
     const toolCards = new Map();
+
+    function setIconButton(button, icon, label) {
+      button.innerHTML = icons[icon];
+      button.setAttribute('aria-label', label);
+      button.setAttribute('title', label);
+    }
 
     function syncInputHeight() {
       input.style.height = 'auto';
@@ -1136,12 +1188,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
         const copyBtn = document.createElement('button');
         copyBtn.className = 'msg-action';
-        copyBtn.textContent = 'Copy';
+        setIconButton(copyBtn, 'copy', 'Copy message');
         copyBtn.onclick = () => copyText(content);
 
         const resetBtn = document.createElement('button');
         resetBtn.className = 'msg-action';
-        resetBtn.textContent = 'Reset to Here';
+        setIconButton(resetBtn, 'reset', 'Reset to here');
         resetBtn.onclick = () => vscode.postMessage({ type: 'reset-to-step', messageId });
 
         actions.appendChild(copyBtn);
@@ -1149,7 +1201,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         if (Array.isArray(parts) && parts.length > 0) {
           const partsBtn = document.createElement('button');
           partsBtn.className = 'msg-action';
-          partsBtn.textContent = 'Parts (' + parts.length + ')';
+          setIconButton(partsBtn, 'parts', 'View message parts (' + parts.length + ')');
           partsBtn.onclick = () => openRawDrawer(role, rawMessageBatches, rawMessages, parts);
           actions.appendChild(partsBtn);
         }
@@ -1163,7 +1215,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
         const button = document.createElement('button');
         button.className = 'msg-action raw-trigger';
-        button.textContent = 'Raw Messages';
+        setIconButton(button, 'raw', 'View raw messages');
         button.onclick = () => openRawDrawer(role, rawMessageBatches, rawMessages, parts);
 
         actions.appendChild(button);
@@ -1186,6 +1238,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function append(role, content, rawMessageBatches, rawMessages, messageId, parts) {
+      if (role === 'user') {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'msg-wrap user';
+
+        const div = document.createElement('div');
+        div.className = 'msg ' + role;
+        div.innerHTML = renderMarkdown(content);
+
+        wrapper.appendChild(div);
+        attachMessageActions(wrapper, role, content, rawMessageBatches, rawMessages, messageId, parts);
+        messages.appendChild(wrapper);
+        messages.scrollTop = messages.scrollHeight;
+        return div;
+      }
+
       const div = document.createElement('div');
       div.className = 'msg ' + role;
       div.innerHTML = renderMarkdown(content);
@@ -1346,6 +1413,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     modelPickerBtn.onclick = () => {
       modelPicker.classList.toggle('hidden');
     };
+
+    setIconButton(document.getElementById('clear'), 'clear', 'Clear chat');
+    setIconButton(document.getElementById('export'), 'export', 'Export chat');
+    setIconButton(document.getElementById('settings'), 'settings', 'Open settings');
+    setIconButton(rawDrawerClose, 'close', 'Close raw messages');
 
     document.getElementById('clear').onclick = () => vscode.postMessage({ type: 'clear' });
     document.getElementById('export').onclick = () => vscode.postMessage({ type: 'export' });
