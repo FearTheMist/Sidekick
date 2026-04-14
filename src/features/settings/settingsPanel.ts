@@ -256,6 +256,32 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     .triple-row { display: grid; grid-template-columns: 1fr 1.4fr 1.2fr; gap: 10px; }
     .field { margin-bottom: 16px; }
     .field label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 500; }
+    .secret-input {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .secret-input input {
+      min-width: 0;
+    }
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      min-width: 38px;
+      padding: 0;
+    }
+    .icon-btn svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     input, select, button {
       border: 1px solid var(--stroke);
       border-radius: 8px;
@@ -323,7 +349,10 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
 
           <div class="field">
             <label>API Key</label>
-            <input id="apiKey" type="password" />
+            <div class="secret-input">
+              <input id="apiKey" type="password" />
+              <button id="toggleApiKey" class="icon-btn" type="button" aria-label="Show API key" title="Show API key"></button>
+            </div>
           </div>
         </div>
 
@@ -366,7 +395,19 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     const providerName = document.getElementById('providerName');
     const baseUrl = document.getElementById('baseUrl');
     const apiKey = document.getElementById('apiKey');
+    const toggleApiKey = document.getElementById('toggleApiKey');
     const modelRows = document.getElementById('modelRows');
+    const visibleApiKeyIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+    const hiddenApiKeyIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 10.7a3 3 0 0 0 4 4"></path><path d="M9.4 5.5A11.4 11.4 0 0 1 12 5c6.4 0 10 7 10 7a18.6 18.6 0 0 1-4 4.8"></path><path d="M6.7 6.7A18.2 18.2 0 0 0 2 12s3.6 7 10 7a10.7 10.7 0 0 0 5.3-1.4"></path></svg>';
+    let isApiKeyVisible = false;
+
+    function setApiKeyVisibility(visible) {
+      isApiKeyVisible = visible;
+      apiKey.type = visible ? 'text' : 'password';
+      toggleApiKey.innerHTML = visible ? visibleApiKeyIcon : hiddenApiKeyIcon;
+      toggleApiKey.setAttribute('aria-label', visible ? 'Hide API key' : 'Show API key');
+      toggleApiKey.setAttribute('title', visible ? 'Hide API key' : 'Show API key');
+    }
 
     function ensureSelection() {
       if (state.providers.length === 0) {
@@ -432,6 +473,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         providerName.value = '';
         baseUrl.value = '';
         apiKey.value = '';
+        setApiKeyVisibility(false);
         modelRows.innerHTML = '';
         return;
       }
@@ -439,6 +481,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       providerName.value = provider.label || provider.id || '';
       baseUrl.value = provider.baseUrl || '';
       apiKey.value = provider.apiKey || '';
+      setApiKeyVisibility(false);
 
       modelRows.innerHTML = '';
       provider.models = Array.isArray(provider.models) ? provider.models : [];
@@ -538,6 +581,12 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       state.selectedIndex = state.providers.length - 1;
       render();
     };
+
+    toggleApiKey.onclick = () => {
+      setApiKeyVisibility(!isApiKeyVisible);
+    };
+
+    setApiKeyVisibility(false);
 
     document.getElementById('removeProvider').onclick = () => {
       if (state.selectedIndex < 0) return;
