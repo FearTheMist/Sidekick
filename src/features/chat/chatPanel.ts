@@ -1042,7 +1042,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <textarea id="input" placeholder="Ask Sidekick..."></textarea>
       <div class="model-row">
         <button id="modelPickerBtn">Model: -</button>
-        <button id="stop" class="stop-btn" disabled aria-label="Send" title="Send" type="button"></button>
+        <button id="stop" class="stop-btn" aria-label="Send" title="Send" type="button"></button>
       </div>
     </div>
   </div>
