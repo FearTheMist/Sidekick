@@ -928,6 +928,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       align-items: center;
       justify-content: center;
     }
+    .stop-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     .stop-btn:disabled {
       opacity: 0.55;
       cursor: default;
@@ -1033,7 +1042,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       <textarea id="input" placeholder="Ask Sidekick..."></textarea>
       <div class="model-row">
         <button id="modelPickerBtn">Model: -</button>
-        <button id="stop" class="stop-btn" disabled aria-label="Start">↑</button>
+        <button id="stop" class="stop-btn" disabled aria-label="Send" title="Send" type="button"></button>
       </div>
     </div>
   </div>
@@ -1058,7 +1067,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>',
       reset: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"></path><path d="M3 3v6h6"></path></svg>',
       parts: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4-8 4-8-4 8-4Z"></path><path d="M4 12l8 4 8-4"></path><path d="M4 17l8 4 8-4"></path></svg>',
-      raw: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9L4 12l4 3"></path><path d="M16 9l4 3-4 3"></path><path d="M14 5l-4 14"></path></svg>'
+      raw: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 9L4 12l4 3"></path><path d="M16 9l4 3-4 3"></path><path d="M14 5l-4 14"></path></svg>',
+      send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2L11 13"></path><path d="M22 2l-7 20-4-9-9-4 20-7Z"></path></svg>',
+      pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>'
     };
     let providers = [];
     let activeProviderId = '';
@@ -1082,8 +1093,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function setRunState(nextRunning) {
       isRunning = nextRunning;
       stopBtn.disabled = false;
-      stopBtn.textContent = nextRunning ? '❚❚' : '↑';
-      stopBtn.setAttribute('aria-label', nextRunning ? 'Stop' : 'Start');
+      setIconButton(stopBtn, nextRunning ? 'pause' : 'send', nextRunning ? 'Stop' : 'Send');
     }
 
     function escapeHtml(text) {
@@ -1430,6 +1440,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     setIconButton(document.getElementById('export'), 'export', 'Export chat');
     setIconButton(document.getElementById('settings'), 'settings', 'Open settings');
     setIconButton(rawDrawerClose, 'close', 'Close raw messages');
+    setIconButton(stopBtn, 'send', 'Send');
 
     document.getElementById('clear').onclick = () => vscode.postMessage({ type: 'clear' });
     document.getElementById('export').onclick = () => vscode.postMessage({ type: 'export' });
