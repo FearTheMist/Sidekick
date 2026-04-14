@@ -140,31 +140,46 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root {
-      --panel: #111b31;
-      --panel-2: #15233f;
-      --stroke: #2a3d63;
-      --text: #deebff;
-      --muted: #9cb4d7;
-      --active: rgba(82, 147, 219, 0.16);
+      --bg: #07080a;
+      --surface: #101111;
+      --surface-2: #0d0e10;
+      --surface-3: #1b1c1e;
+      --stroke: rgba(255, 255, 255, 0.08);
+      --stroke-strong: #252829;
+      --text: #f9f9f9;
+      --muted: #9c9c9d;
+      --subtle: #6a6b6c;
+      --blue: #55b3ff;
+      --blue-soft: hsla(202, 100%, 67%, 0.15);
+      --red: #ff6363;
+      --red-soft: hsla(0, 100%, 69%, 0.15);
+      --ring: rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset;
+      --button-shadow: rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset, rgba(255, 255, 255, 0.14) 0px 0px 0px 1px, rgba(0, 0, 0, 0.2) 0px -1px 0px 0px inset;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       color: var(--text);
-      background: linear-gradient(145deg, #0a1323, #12213b);
-      font-family: "Segoe UI", "Noto Sans", sans-serif;
+      background:
+        radial-gradient(900px 400px at 50% -10%, rgba(215, 201, 175, 0.05), transparent 60%),
+        radial-gradient(800px 300px at 110% 0%, rgba(85, 179, 255, 0.08), transparent 55%),
+        var(--bg);
+      font-family: Inter, "Segoe UI", "Noto Sans", sans-serif;
+      font-feature-settings: "calt" 1, "kern" 1, "liga" 1, "ss03" 1;
+      letter-spacing: 0.2px;
     }
     .root {
       display: grid;
       grid-template-columns: 300px 1fr;
-      gap: 12px;
+      gap: 16px;
       height: 100vh;
-      padding: 12px;
+      padding: 16px;
     }
     .panel {
-      border: 1px solid var(--stroke);
-      border-radius: 10px;
-      background: rgba(17, 28, 49, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 16px;
+      background: rgba(16, 17, 17, 0.94);
+      box-shadow: var(--ring);
       overflow: hidden;
       min-height: 0;
     }
@@ -172,21 +187,28 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      padding: 10px;
-      border-bottom: 1px solid var(--stroke);
-      background: rgba(9, 16, 30, 0.8);
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--stroke-strong);
+      background: rgba(7, 8, 10, 0.88);
+    }
+    .header strong {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
     }
     .providers { overflow: auto; height: calc(100% - 51px); }
     .provider-item {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
+      gap: 10px;
       align-items: center;
-      padding: 10px;
-      border-bottom: 1px solid #22375b;
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
       cursor: pointer;
+      transition: opacity 140ms ease, background 140ms ease;
     }
+    .provider-item:hover { opacity: 0.86; }
     .provider-main {
       min-width: 0;
       overflow: hidden;
@@ -194,53 +216,78 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     .provider-name {
       display: block;
       font-weight: 600;
+      font-size: 14px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
     .provider-url {
       display: block;
-      margin-top: 2px;
-      color: #9cb4d7;
+      margin-top: 4px;
+      color: var(--muted);
       font-size: 12px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .provider-item.active { background: var(--active); }
+    .provider-item.active {
+      background: linear-gradient(180deg, rgba(85, 179, 255, 0.14), rgba(85, 179, 255, 0.08));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    }
     .toggle-btn {
-      border: 1px solid #2e486f;
+      border: 1px solid rgba(255, 255, 255, 0.12);
       border-radius: 999px;
       min-width: 58px;
       min-height: 28px;
       font-size: 12px;
       padding: 0 10px;
       color: var(--text);
-      background: #172742;
+      background: rgba(255, 255, 255, 0.04);
+      box-shadow: var(--button-shadow);
       cursor: pointer;
       justify-self: end;
     }
-    .toggle-btn.off { border-color: #68445d; color: #f3adc4; }
-    .content { padding: 12px; overflow: auto; height: calc(100% - 51px); }
+    .toggle-btn.off {
+      border-color: rgba(255, 99, 99, 0.2);
+      color: #ffb3b3;
+      background: var(--red-soft);
+    }
+    .content { padding: 16px; overflow: auto; height: calc(100% - 51px); }
     .triple-row { display: grid; grid-template-columns: 1fr 1.4fr 1.2fr; gap: 10px; }
-    .field { margin-bottom: 12px; }
-    .field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+    .field { margin-bottom: 16px; }
+    .field label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 500; }
     input, select, button {
       border: 1px solid var(--stroke);
       border-radius: 8px;
-      background: var(--panel-2);
+      background: var(--surface-2);
       color: var(--text);
-      min-height: 34px;
-      padding: 6px 10px;
+      min-height: 38px;
+      padding: 8px 12px;
       font: inherit;
+      letter-spacing: inherit;
     }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { border: 1px solid #2a3d63; padding: 8px; text-align: left; }
-    th { background: #13213a; color: #a9c0e3; }
+    input::placeholder { color: var(--subtle); }
+    input:focus, select:focus, button:focus {
+      outline: none;
+      border-color: rgba(85, 179, 255, 0.45);
+      box-shadow: 0 0 0 4px var(--blue-soft);
+    }
+    button {
+      box-shadow: var(--button-shadow);
+      transition: opacity 140ms ease;
+    }
+    button:hover { opacity: 0.78; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; border: 1px solid var(--stroke-strong); border-radius: 12px; overflow: hidden; }
+    th, td { border: 1px solid var(--stroke-strong); padding: 10px; text-align: left; }
+    th { background: rgba(255, 255, 255, 0.03); color: var(--muted); font-size: 12px; font-weight: 600; }
     td input, td select { width: 100%; }
-    .actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
-    .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
-    .danger { border-color: #7d3652; color: #f3adc4; }
+    .actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 16px; }
+    .hint { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.5; }
+    .danger {
+      border-color: rgba(255, 99, 99, 0.22);
+      color: #ffc3c3;
+      background: var(--red-soft);
+    }
     @media (max-width: 980px) {
       .root { grid-template-columns: 1fr; grid-template-rows: 250px 1fr; }
       .triple-row { grid-template-columns: 1fr; }

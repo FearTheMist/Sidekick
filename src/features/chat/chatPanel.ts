@@ -534,25 +534,39 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root {
-      --bg-1: #0c111b;
-      --bg-2: #182436;
-      --panel: rgba(12, 18, 30, 0.86);
-      --stroke: #2a3d55;
-      --text: #dce8f7;
-      --muted: #9db2c9;
-      --accent: #4dd4ac;
-      --user: #58a6ff;
-      --assistant: #4dd4ac;
+      --bg: #07080a;
+      --surface: #101111;
+      --surface-2: #0d0d0d;
+      --surface-3: #1b1c1e;
+      --stroke: rgba(255, 255, 255, 0.08);
+      --stroke-soft: rgba(255, 255, 255, 0.06);
+      --stroke-strong: #252829;
+      --text: #f9f9f9;
+      --muted: #9c9c9d;
+      --dim: #6a6b6c;
+      --blue: #55b3ff;
+      --blue-soft: hsla(202, 100%, 67%, 0.15);
+      --green: #5fc992;
+      --yellow: #ffbc33;
+      --red: #ff6363;
+      --red-soft: hsla(0, 100%, 69%, 0.15);
+      --ring: rgb(27, 28, 30) 0px 0px 0px 1px, rgb(7, 8, 10) 0px 0px 0px 1px inset;
+      --floating: rgba(0, 0, 0, 0.5) 0px 0px 0px 2px, rgba(255, 255, 255, 0.19) 0px 0px 14px, rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset;
+      --button-shadow: rgba(255, 255, 255, 0.05) 0px 1px 0px 0px inset, rgba(255, 255, 255, 0.16) 0px 0px 0px 1px, rgba(0, 0, 0, 0.2) 0px -1px 0px 0px inset;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
+      padding: 0;
       color: var(--text);
       background:
-        radial-gradient(1200px 460px at -10% -20%, #275f84 0%, transparent 55%),
-        radial-gradient(900px 420px at 110% -10%, #1a5a4d 0%, transparent 50%),
-        linear-gradient(150deg, var(--bg-1), var(--bg-2));
-      font-family: "Segoe UI", "Noto Sans", sans-serif;
+        radial-gradient(900px 420px at 50% -10%, rgba(215, 201, 175, 0.05) 0%, transparent 60%),
+        radial-gradient(800px 360px at 110% 0%, rgba(85, 179, 255, 0.08) 0%, transparent 58%),
+        radial-gradient(700px 280px at -10% 0%, rgba(255, 99, 99, 0.08) 0%, transparent 55%),
+        var(--bg);
+      font-family: Inter, "Segoe UI", "Noto Sans", sans-serif;
+      font-feature-settings: "calt" 1, "kern" 1, "liga" 1, "ss03" 1;
+      letter-spacing: 0.2px;
       height: 100vh;
       display: flex;
       flex-direction: column;
@@ -562,55 +576,79 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       position: sticky;
       top: 0;
       z-index: 10;
-      display: grid;
-      grid-template-columns: 1fr auto auto auto;
-      gap: 8px;
-      padding: 10px;
-      border-bottom: 1px solid var(--stroke);
-      background: rgba(9, 14, 24, 0.86);
-      backdrop-filter: blur(8px);
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px 6px;
+      background: rgba(7, 8, 10, 0.72);
+      backdrop-filter: blur(12px);
     }
     select, input, button, textarea {
       border: 1px solid var(--stroke);
       border-radius: 8px;
-      background: rgba(11, 19, 31, 0.95);
+      background: rgba(13, 13, 13, 0.95);
       color: var(--text);
       font: inherit;
+      letter-spacing: inherit;
     }
     select, input, button { min-height: 34px; padding: 6px 10px; }
-    button { cursor: pointer; }
-    button:hover { border-color: var(--accent); }
+    button {
+      cursor: pointer;
+      box-shadow: var(--button-shadow);
+      transition: opacity 140ms ease;
+    }
+    .toolbar button {
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border-color: rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .toolbar button:hover {
+      color: var(--text);
+    }
+    button:hover { opacity: 0.78; }
+    button:focus, textarea:focus, input:focus, select:focus {
+      outline: none;
+      border-color: inherit;
+      box-shadow: none;
+    }
     #messages {
       flex: 1;
       min-height: 0;
       overflow: auto;
-      padding: 12px;
+      padding: 16px 12px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 14px;
     }
     .msg {
       margin: 0;
       padding: 0;
-      line-height: 1.45;
+      line-height: 1.6;
       white-space: normal;
       overflow-wrap: anywhere;
     }
     .msg.user {
       align-self: flex-end;
       max-width: 92%;
-      padding: 10px 12px;
-      border: 1px solid var(--stroke);
-      border-left: 3px solid var(--user);
-      border-radius: 10px;
-      background: var(--panel);
+      padding: 14px 16px;
+      border: 1px solid var(--stroke-soft);
+      border-radius: 16px;
+      background: rgba(16, 17, 17, 0.9);
+      box-shadow: var(--ring);
     }
     .msg.assistant {
       align-self: stretch;
       max-width: 100%;
       padding: 0;
       border: none;
+      border-radius: 0;
       background: transparent;
+      box-shadow: none;
     }
     .thinking {
       color: var(--muted);
@@ -639,44 +677,48 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       100% { opacity: 0.2; }
     }
     .tool-msg {
-      border-left: 3px solid #eab308;
-      background: rgba(35, 29, 7, 0.35);
+      border: 1px solid rgba(255, 188, 51, 0.16);
+      background: rgba(255, 188, 51, 0.08);
       font-size: 12px;
     }
     .tool-head {
       display: flex;
       align-items: center;
       gap: 8px;
-      color: #f5d87b;
+      color: #ffd780;
       margin-bottom: 6px;
     }
     .tool-badge {
-      border: 1px solid #9f7b23;
+      border: 1px solid rgba(255, 188, 51, 0.2);
       border-radius: 999px;
       padding: 1px 8px;
       font-size: 11px;
-      color: #f5d87b;
+      color: #ffd780;
+      background: rgba(255, 188, 51, 0.1);
     }
     .tool-detail {
       margin: 0;
       padding: 6px 8px;
-      border: 1px solid #4b3a13;
+      border: 1px solid rgba(255, 188, 51, 0.12);
       border-radius: 6px;
-      background: rgba(9, 8, 4, 0.5);
+      background: rgba(13, 13, 13, 0.78);
       white-space: pre-wrap;
       word-break: break-word;
-      color: #d9cda4;
+      color: #f0dfad;
     }
     .msg-actions {
       margin-top: 8px;
       display: flex;
       gap: 8px;
+      flex-wrap: wrap;
     }
     .msg-action {
       min-height: 28px;
       padding: 4px 8px;
       color: var(--muted);
       font-size: 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.03);
     }
     .raw-trigger {
       min-height: 28px;
@@ -687,7 +729,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     .drawer-backdrop {
       position: fixed;
       inset: 0;
-      background: rgba(2, 6, 12, 0.42);
+      background: rgba(2, 6, 12, 0.58);
       opacity: 0;
       pointer-events: none;
       transition: opacity 140ms ease;
@@ -705,9 +747,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       height: 100vh;
       display: flex;
       flex-direction: column;
-      border-left: 1px solid var(--stroke);
-      background: rgba(8, 14, 24, 0.98);
-      box-shadow: -18px 0 40px rgba(0, 0, 0, 0.35);
+      border-left: 1px solid var(--stroke-soft);
+      background: rgba(7, 8, 10, 0.98);
+      box-shadow: var(--floating);
       transform: translateX(100%);
       transition: transform 160ms ease;
       z-index: 50;
@@ -721,7 +763,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       justify-content: space-between;
       gap: 12px;
       padding: 12px;
-      border-bottom: 1px solid var(--stroke);
+      border-bottom: 1px solid var(--stroke-strong);
     }
     .raw-drawer-title {
       min-width: 0;
@@ -743,9 +785,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       padding: 12px;
     }
     .raw-box {
-      border: 1px solid #2c415b;
-      border-radius: 8px;
-      background: rgba(8, 16, 27, 0.78);
+      border: 1px solid var(--stroke-soft);
+      border-radius: 12px;
+      background: rgba(16, 17, 17, 0.82);
       overflow: hidden;
       margin-bottom: 10px;
     }
@@ -757,7 +799,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       user-select: none;
     }
     .raw-item {
-      border-top: 1px solid #223247;
+      border-top: 1px solid var(--stroke-strong);
     }
     .raw-item summary {
       cursor: pointer;
@@ -778,37 +820,42 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       padding: 0 10px 10px;
     }
     .raw-tag {
-      border: 1px solid #35506d;
+      border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 999px;
       padding: 1px 7px;
-      background: rgba(20, 34, 52, 0.8);
+      background: rgba(255, 255, 255, 0.04);
     }
     .raw-content {
       margin: 0;
       padding: 8px;
-      border: 1px solid #23364d;
+      border: 1px solid var(--stroke-strong);
       border-radius: 6px;
-      background: #08101b;
+      background: #0d0d0d;
       white-space: pre-wrap;
       word-break: break-word;
       color: var(--text);
-      font-family: Consolas, "Courier New", monospace;
+      font-family: "GeistMono", Consolas, "Courier New", monospace;
       font-size: 12px;
     }
     .input {
       display: grid;
       gap: 8px;
-      padding: 10px;
-      border-top: 1px solid var(--stroke);
-      background: rgba(9, 14, 24, 0.9);
+      padding: 12px;
+      border-top: 1px solid var(--stroke-strong);
+      background: rgba(7, 8, 10, 0.92);
     }
     .input-shell {
       display: grid;
       gap: 8px;
-      padding: 10px;
-      border: 1px solid var(--stroke);
-      border-radius: 10px;
-      background: rgba(13, 20, 34, 0.94);
+      padding: 12px;
+      border: 1px solid var(--stroke-soft);
+      border-radius: 16px;
+      background: rgba(16, 17, 17, 0.96);
+      box-shadow: var(--ring);
+    }
+    .input-shell:focus-within {
+      border-color: var(--stroke-soft);
+      box-shadow: var(--ring);
     }
     .selection-context {
       min-height: 18px;
@@ -819,14 +866,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       display: none;
     }
     .stop-btn {
-      min-width: 22px;
-      min-height: 22px;
-      width: 22px;
-      height: 22px;
+      min-width: 34px;
+      min-height: 34px;
+      width: 34px;
+      height: 34px;
       padding: 0;
+      border-radius: 999px;
       border-color: transparent;
-      color: #ffd5dc;
-      background: transparent;
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
       justify-self: end;
       display: inline-flex;
       align-items: center;
@@ -846,12 +894,14 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       border: none;
       background: transparent;
       color: var(--text);
+      line-height: 1.6;
     }
+    textarea::placeholder { color: var(--dim); }
     .model-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 2px;
+      gap: 8px;
     }
     .model-row button:first-child {
       min-width: 0;
@@ -860,14 +910,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       white-space: nowrap;
       flex: 1;
       text-align: left;
+      border-radius: 999px;
       border-color: transparent;
-      background: transparent;
-      min-height: 22px;
+      background: rgba(255, 255, 255, 0.04);
+      min-height: 34px;
       line-height: 22px;
-      padding-top: 0;
-      padding-bottom: 0;
-      padding-left: 0;
-      padding-right: 0;
+      padding: 6px 12px;
     }
     .model-picker {
       position: fixed;
@@ -876,35 +924,44 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       bottom: 84px;
       max-height: 280px;
       overflow: auto;
-      border: 1px solid var(--stroke);
-      border-radius: 10px;
-      background: rgba(8, 14, 24, 0.98);
-      box-shadow: 0 10px 36px rgba(0, 0, 0, 0.4);
-      padding: 10px;
+      border: 1px solid var(--stroke-soft);
+      border-radius: 16px;
+      background: rgba(7, 8, 10, 0.98);
+      box-shadow: var(--floating);
+      padding: 12px;
       z-index: 20;
     }
     .model-picker.hidden { display: none; }
-    .provider-group { margin-bottom: 12px; }
-    .provider-title { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-    .model-option { display: block; width: 100%; text-align: left; margin-bottom: 6px; }
-    .model-option.active { border-color: var(--accent); background: rgba(77, 212, 172, 0.14); }
+    .provider-group { margin-bottom: 14px; }
+    .provider-title { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .model-option {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin-bottom: 8px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .model-option.active {
+      border-color: rgba(85, 179, 255, 0.18);
+      background: linear-gradient(180deg, rgba(85, 179, 255, 0.14), rgba(85, 179, 255, 0.08));
+    }
     pre {
       margin: 8px 0;
       padding: 10px;
-      border: 1px solid #2c415b;
-      border-radius: 8px;
-      background: #08101b;
+      border: 1px solid var(--stroke-strong);
+      border-radius: 10px;
+      background: #0d0d0d;
       overflow-x: auto;
     }
-    code { font-family: Consolas, "Courier New", monospace; }
-    .kw { color: #ffcf6e; }
-    .str { color: #9be17d; }
-    .num { color: #8fb8ff; }
+    code { font-family: "GeistMono", Consolas, "Courier New", monospace; }
+    .kw { color: #ffbc33; }
+    .str { color: #5fc992; }
+    .num { color: #55b3ff; }
   </style>
 </head>
 <body>
   <div class="toolbar">
-    <div style="display:flex;align-items:center;color:var(--muted);font-size:12px;">Sidekick Chat</div>
     <button id="clear">Clear</button>
     <button id="export">Export</button>
     <button id="settings">Settings</button>
