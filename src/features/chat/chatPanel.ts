@@ -1509,6 +1509,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         inProgress = append('assistant', '');
         inProgress.dataset.loading = '1';
         inProgress.innerHTML = '<span class="thinking"><span>Sidekick is thinking</span><span class="thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></span>';
+        messages.scrollTop = messages.scrollHeight;
         setRunState(true);
       }
 
@@ -1531,6 +1532,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           msg.message.id,
           msg.message.parts
         );
+        messages.scrollTop = messages.scrollHeight;
       }
 
       if (msg.type === 'tool-activity') {
