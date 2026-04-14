@@ -743,9 +743,21 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       display: flex;
       gap: 8px;
       flex-wrap: wrap;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 120ms ease;
     }
     .msg-wrap.user .msg-actions {
       justify-content: flex-end;
+    }
+    .msg-wrap.user:hover > .msg-actions,
+    .msg-wrap.user:focus-within > .msg-actions,
+    .msg.assistant:hover > .msg-actions,
+    .msg.assistant:focus-within > .msg-actions {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
     }
     .msg-action {
       width: 16px;
