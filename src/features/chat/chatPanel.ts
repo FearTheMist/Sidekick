@@ -9,11 +9,16 @@ import {
 } from "../../context/contextCollector";
 import {
   buildHistoryId,
+  ChatView,
+  ChatSession,
+  ChatSessionSummary,
   ChatMessagePart,
   ChatHistoryItem,
   ChatMessage,
-  ChatSelectionState,
   ChatStore,
+  DEFAULT_SESSION_TITLE,
+  createSession,
+  summarizeSession,
 } from "./chatStore";
 
 type IncomingMessage =
@@ -22,15 +27,32 @@ type IncomingMessage =
   | { type: "stop" }
   | { type: "reset-to-step"; messageId: string }
   | { type: "selection"; providerId?: string; model?: string }
+  | { type: "view"; view: ChatView }
+  | { type: "new-session" }
+  | { type: "open-session"; sessionId: string }
+  | { type: "delete-session"; sessionId: string }
   | { type: "clear" }
   | { type: "export" }
   | { type: "open-settings" };
 
 type OutgoingMessage =
   | {
-      type: "history";
+      type: "hydrate";
       history: ChatHistoryItem[];
+      sessions: ChatSessionSummary[];
+      activeSessionId: string;
+      activeSessionTitle: string;
+      currentView: ChatView;
       providers: ProviderConfig[];
+      profileProviderId: string;
+      profileModel: string;
+    }
+  | {
+      type: "session-meta";
+      sessions: ChatSessionSummary[];
+      activeSessionId: string;
+      activeSessionTitle: string;
+      currentView: ChatView;
       profileProviderId: string;
       profileModel: string;
     }
@@ -56,9 +78,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private readonly store: ChatStore;
   private readonly agentRunner: AgentRunner;
-  private history: ChatHistoryItem[];
-  private selectedProviderId: string;
-  private selectedModel?: string;
+  private sessions: ChatSession[];
+  private activeSessionId: string;
+  private currentView: ChatView;
+  private readonly migratedState: boolean;
+  private readonly pendingTitleSessions = new Set<string>();
   private activeRun?: AbortController;
 
   constructor(
@@ -67,11 +91,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   ) {
     this.store = new ChatStore(context);
     this.agentRunner = new AgentRunner(gateway);
-    this.history = this.store.getHistory();
     const profile = SidekickConfig.getChatProfile();
-    const saved = this.store.getSelection();
-    this.selectedProviderId = saved?.providerId || profile.providerId;
-    this.selectedModel = saved?.model || profile.model;
+    const state = this.store.loadState(profile.providerId, profile.model);
+    this.sessions = state.sessions;
+    this.activeSessionId = state.activeSessionId;
+    this.currentView = state.currentView;
+    this.migratedState = state.migrated;
     this.context.subscriptions.push(
       vscode.window.onDidChangeTextEditorSelection(() => {
         this.postSelectionContext();
@@ -85,15 +110,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   getActiveProfile(): { providerId: string; model?: string } {
+    const session = this.getActiveSession();
     return {
-      providerId: this.selectedProviderId,
-      model: this.selectedModel,
+      providerId: session.providerId,
+      model: session.model,
     };
   }
 
   refreshProviders(): void {
-    this.ensureValidSelection(SidekickConfig.getProviders());
-    this.postHistory();
+    this.ensureValidSessionSelections(SidekickConfig.getProviders());
+    void this.store.saveSessions(this.sessions);
+    this.postHydrate();
   }
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
@@ -102,12 +129,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       enableScripts: true,
     };
 
+    if (this.migratedState) {
+      await this.store.saveState(this.sessions, this.activeSessionId, this.currentView);
+    }
+
     webviewView.webview.html = this.renderHtml(webviewView.webview);
 
     webviewView.webview.onDidReceiveMessage(async (raw: IncomingMessage) => {
       switch (raw.type) {
         case "ready": {
-          this.postHistory();
+          this.postHydrate();
           this.postSelectionContext();
           break;
         }
@@ -124,19 +155,60 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           break;
         }
         case "selection": {
+          const session = this.getActiveSession();
           if (raw.providerId) {
-            this.selectedProviderId = raw.providerId;
+            session.providerId = raw.providerId;
           }
           if (typeof raw.model === "string") {
-            this.selectedModel = raw.model;
+            session.model = raw.model;
           }
-          await this.saveSelection();
+          this.ensureValidSessionSelection(session, SidekickConfig.getProviders());
+          await this.store.saveSessions(this.sessions);
+          this.postSessionMeta();
+          break;
+        }
+        case "view": {
+          this.currentView = raw.view === "list" ? "list" : "chat";
+          await this.store.saveCurrentView(this.currentView);
+          break;
+        }
+        case "new-session": {
+          if (this.activeRun) {
+            vscode.window.showInformationMessage("Wait for the current reply to finish before switching sessions.");
+            break;
+          }
+          await this.createAndOpenSession();
+          break;
+        }
+        case "open-session": {
+          if (this.activeRun) {
+            vscode.window.showInformationMessage("Wait for the current reply to finish before switching sessions.");
+            break;
+          }
+          const exists = this.sessions.some((session) => session.id === raw.sessionId);
+          if (!exists) {
+            break;
+          }
+          this.activeSessionId = raw.sessionId;
+          await this.store.saveActiveSessionId(this.activeSessionId);
+          this.postHydrate();
+          break;
+        }
+        case "delete-session": {
+          if (this.activeRun) {
+            vscode.window.showInformationMessage("Wait for the current reply to finish before switching sessions.");
+            break;
+          }
+          await this.deleteSession(raw.sessionId);
           break;
         }
         case "clear": {
-          this.history = [];
-          await this.store.clear();
-          this.postHistory();
+          const session = this.getActiveSession();
+          session.history = [];
+          session.title = DEFAULT_SESSION_TITLE;
+          session.updatedAt = Date.now();
+          await this.store.saveSessions(this.sessions);
+          this.postHydrate();
           break;
         }
         case "export": {
@@ -169,6 +241,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    const session = this.getActiveSession();
+    const hadMessages = session.history.some((item) => item.kind === "message");
+    if (providerId) {
+      session.providerId = providerId;
+    }
+    if (model) {
+      session.model = model;
+    }
+    this.ensureValidSessionSelection(session, SidekickConfig.getProviders());
+
     const userMessage: ChatMessage = {
       id: buildHistoryId("message"),
       kind: "message",
@@ -177,23 +259,23 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       timestamp: Date.now(),
       parts: this.buildUserMessageParts(text),
     };
-    this.history.push(userMessage);
-    void this.store.saveHistory(this.history);
+    session.history.push(userMessage);
+    session.updatedAt = userMessage.timestamp;
+    void this.store.saveSessions(this.sessions);
+    this.postSessionMeta();
     this.post({ type: "append", message: userMessage });
+    if (!hadMessages && session.title === DEFAULT_SESSION_TITLE) {
+      void this.generateSessionTitle(session.id, text);
+    }
 
     const snapshot = await collectContext(text);
     const contextPrompt = toContextPrompt(snapshot);
 
-    const profile = SidekickConfig.getChatProfile();
-    if (providerId) {
-      profile.providerId = providerId;
-      this.selectedProviderId = providerId;
-    }
-    if (model) {
-      profile.model = model;
-      this.selectedModel = model;
-    }
-    await this.saveSelection();
+    const profile = {
+      ...SidekickConfig.getChatProfile(),
+      providerId: session.providerId,
+      model: session.model,
+    };
 
     const provider = SidekickConfig.getProviders().find(
       (item) => item.id === profile.providerId
@@ -209,7 +291,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         role: "system" as const,
         content: contextPrompt,
       },
-      ...this.history
+      ...session.history
         .filter((item): item is ChatMessage => item.kind === "message")
         .slice(-20)
         .map((message) => ({
@@ -243,7 +325,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
           this.post({ type: "assistant-delta", delta: event.delta });
         }
         if (event.type === "tool_activity") {
-          this.history.push({
+          session.history.push({
             kind: "tool_activity",
             id: event.id,
             phase: event.phase,
@@ -251,7 +333,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
             detail: event.detail,
             timestamp: Date.now(),
           });
-          void this.store.saveHistory(this.history);
+          session.updatedAt = Date.now();
+          void this.store.saveSessions(this.sessions);
           this.post({
             type: "tool-activity",
             id: event.id,
@@ -298,13 +381,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       rawMessageBatches,
     };
 
-    this.history.push(assistantMessage);
-    await this.store.saveHistory(this.history);
+    session.history.push(assistantMessage);
+    session.updatedAt = assistantMessage.timestamp;
+    await this.store.saveSessions(this.sessions);
+    this.postSessionMeta();
     this.post({ type: "assistant-finalize", message: assistantMessage });
     this.post({ type: "assistant-end" });
   }
 
   private async exportHistory(): Promise<void> {
+    const session = this.getActiveSession();
     const uri = await vscode.window.showSaveDialog({
       saveLabel: "Export Chat",
       filters: { Markdown: ["md"] },
@@ -315,7 +401,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const markdown = this.history
+    const markdown = session.history
       .map((item) => {
         if (item.kind === "tool_activity") {
           return `## Tool ${item.phase === "start" ? "Running" : "Done"}: ${item.name}\n\n${item.detail}\n`;
@@ -333,15 +419,16 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private async resetToStep(messageId: string): Promise<void> {
-    const targetIndex = this.history.findIndex(
+    const session = this.getActiveSession();
+    const targetIndex = session.history.findIndex(
       (item) => item.kind === "message" && item.id === messageId && item.role === "user"
     );
     if (targetIndex === -1) {
       return;
     }
 
-    const target = this.history[targetIndex] as ChatMessage;
-    const rollback = this.history
+    const target = session.history[targetIndex] as ChatMessage;
+    const rollback = session.history
       .slice(targetIndex)
       .filter(
         (item): item is ChatMessage => item.kind === "message" && item.role === "user"
@@ -349,10 +436,154 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       .flatMap((item) => item.workspaceMutations || []);
 
     await this.rollbackWorkspaceMutations(rollback);
-    this.history = this.history.slice(0, targetIndex);
-    await this.store.saveHistory(this.history);
-    this.postHistory();
+    session.history = session.history.slice(0, targetIndex);
+    session.title = session.history.length > 0 ? session.title : DEFAULT_SESSION_TITLE;
+    session.updatedAt = Date.now();
+    await this.store.saveSessions(this.sessions);
+    this.postHydrate();
     this.post({ type: "seed", text: target.content });
+  }
+
+  private getActiveSession(): ChatSession {
+    this.ensureSessionExists();
+    let session = this.sessions.find((item) => item.id === this.activeSessionId);
+    if (!session) {
+      session = this.sessions[0];
+      this.activeSessionId = session.id;
+    }
+    this.ensureValidSessionSelection(session, SidekickConfig.getProviders());
+    return session;
+  }
+
+  private ensureSessionExists(): void {
+    if (this.sessions.length > 0) {
+      return;
+    }
+    const profile = SidekickConfig.getChatProfile();
+    const session = createSession(
+      profile.providerId,
+      profile.model,
+      DEFAULT_SESSION_TITLE,
+      []
+    );
+    this.sessions = [session];
+    this.activeSessionId = session.id;
+  }
+
+  private ensureValidSessionSelections(providers: ProviderConfig[]): void {
+    this.ensureSessionExists();
+    this.sessions.forEach((session) => this.ensureValidSessionSelection(session, providers));
+    if (!this.sessions.some((session) => session.id === this.activeSessionId)) {
+      this.activeSessionId = this.sessions[0].id;
+    }
+  }
+
+  private ensureValidSessionSelection(
+    session: ChatSession,
+    providers: ProviderConfig[]
+  ): void {
+    if (providers.length === 0) {
+      session.providerId = "";
+      session.model = "";
+      return;
+    }
+
+    let provider = providers.find((item) => item.id === session.providerId);
+    if (!provider) {
+      provider = providers[0];
+      session.providerId = provider.id;
+    }
+
+    const models = provider.models || [];
+    if (models.length === 0) {
+      session.model = provider.defaultModel || session.model || "";
+      return;
+    }
+
+    if (!models.some((item) => item.id === session.model)) {
+      session.model = models[0].id;
+    }
+  }
+
+  private async createAndOpenSession(): Promise<void> {
+    const current = this.getActiveSession();
+    const profile = SidekickConfig.getChatProfile();
+    const session = createSession(
+      current.providerId || profile.providerId,
+      current.model || profile.model,
+      DEFAULT_SESSION_TITLE,
+      []
+    );
+    this.sessions.unshift(session);
+    this.activeSessionId = session.id;
+    await this.store.saveState(this.sessions, this.activeSessionId, this.currentView);
+    this.postHydrate();
+  }
+
+  private async deleteSession(sessionId: string): Promise<void> {
+    const targetIndex = this.sessions.findIndex((session) => session.id === sessionId);
+    if (targetIndex === -1) {
+      return;
+    }
+
+    this.sessions.splice(targetIndex, 1);
+    this.pendingTitleSessions.delete(sessionId);
+
+    if (this.sessions.length === 0) {
+      const profile = SidekickConfig.getChatProfile();
+      const fallback = createSession(
+        profile.providerId,
+        profile.model,
+        DEFAULT_SESSION_TITLE,
+        []
+      );
+      this.sessions = [fallback];
+      this.activeSessionId = fallback.id;
+    } else if (this.activeSessionId === sessionId) {
+      const nextSession = this.sessions[Math.max(0, targetIndex - 1)] || this.sessions[0];
+      this.activeSessionId = nextSession.id;
+    }
+
+    await this.store.saveState(this.sessions, this.activeSessionId, this.currentView);
+    this.postHydrate();
+  }
+
+  private getSessionSummaries(): ChatSessionSummary[] {
+    return this.sessions
+      .map((session) => summarizeSession(session))
+      .sort((left, right) => right.updatedAt - left.updatedAt);
+  }
+
+  private postHydrate(): void {
+    const providers = SidekickConfig.getProviders();
+    this.ensureValidSessionSelections(providers);
+    const session = this.getActiveSession();
+    this.post({
+      type: "hydrate",
+      history: session.history,
+      sessions: this.getSessionSummaries(),
+      activeSessionId: session.id,
+      activeSessionTitle: session.title,
+      currentView: this.currentView,
+      providers,
+      profileProviderId: session.providerId,
+      profileModel: session.model || "",
+    });
+  }
+
+  private postSessionMeta(): void {
+    const providers = SidekickConfig.getProviders();
+    this.ensureValidSessionSelections(providers);
+    const session = this.getActiveSession();
+    this.post({
+      type: "session-meta",
+      sessions: this.getSessionSummaries(),
+      activeSessionId: session.id,
+      activeSessionTitle: session.title,
+      currentView: this.currentView,
+      profileProviderId: session.providerId,
+      profileModel: session.model || "",
+    });
   }
 
   private async rollbackWorkspaceMutations(mutations: import("../../agent/builtinTools").WorkspaceMutation[]): Promise<void> {
@@ -380,23 +611,78 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private postHistory(): void {
-    const providers = SidekickConfig.getProviders();
-    this.ensureValidSelection(providers);
-    this.post({
-      type: "history",
-      history: this.history,
-      providers,
-      profileProviderId: this.selectedProviderId,
-      profileModel: this.selectedModel || "",
-    });
-  }
-
   private postSelectionContext(): void {
     this.post({
       type: "selection-context",
       location: getSelectedLocation(vscode.window.activeTextEditor),
     });
+  }
+
+  private async generateSessionTitle(sessionId: string, firstMessage: string): Promise<void> {
+    if (!firstMessage.trim() || this.pendingTitleSessions.has(sessionId)) {
+      return;
+    }
+
+    const session = this.sessions.find((item) => item.id === sessionId);
+    if (!session || session.title !== DEFAULT_SESSION_TITLE) {
+      return;
+    }
+
+    const provider = SidekickConfig.getProviders().find(
+      (item) => item.id === session.providerId
+    );
+    if (!provider) {
+      return;
+    }
+
+    this.pendingTitleSessions.add(sessionId);
+    try {
+      const profile = {
+        ...SidekickConfig.getChatProfile(),
+        providerId: session.providerId,
+        model: session.model,
+        temperature: 0.2,
+        maxTokens: 48,
+      };
+      const prompt = [
+        "Generate one concise chat title.",
+        "Requirements:",
+        "- Output only the title text",
+        "- No quotes",
+        "- No punctuation at the end",
+        "- Max 12 words",
+      ].join("\n");
+
+      let text = "";
+      for await (const event of this.gateway.streamChat({
+        profile,
+        messages: [
+          { role: "system", content: prompt },
+          { role: "user", content: firstMessage },
+        ],
+        extraBody: buildNoThinkingParams(provider, profile.model),
+      })) {
+        if (event.type === "text") {
+          text += event.delta;
+        }
+        if (event.type === "error") {
+          return;
+        }
+      }
+
+      const title = sanitizeSessionTitle(text);
+      const target = this.sessions.find((item) => item.id === sessionId);
+      if (!title || !target || target.title !== DEFAULT_SESSION_TITLE) {
+        return;
+      }
+      target.title = title;
+      await this.store.saveSessions(this.sessions);
+      this.postSessionMeta();
+    } catch {
+      // Leave the default title when title generation fails.
+    } finally {
+      this.pendingTitleSessions.delete(sessionId);
+    }
   }
 
   private async buildChatSystemPrompt(
@@ -491,39 +777,6 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     ];
   }
 
-  private ensureValidSelection(providers: ProviderConfig[]): void {
-    if (providers.length === 0) {
-      this.selectedProviderId = "";
-      this.selectedModel = "";
-      return;
-    }
-
-    let provider = providers.find((item) => item.id === this.selectedProviderId);
-    if (!provider) {
-      provider = providers[0];
-      this.selectedProviderId = provider.id;
-    }
-
-    const models = provider.models || [];
-    if (models.length === 0) {
-      this.selectedModel = provider.defaultModel || this.selectedModel || "";
-      return;
-    }
-
-    const exists = models.some((item) => item.id === this.selectedModel);
-    if (!exists) {
-      this.selectedModel = models[0].id;
-    }
-  }
-
-  private async saveSelection(): Promise<void> {
-    const selection: ChatSelectionState = {
-      providerId: this.selectedProviderId,
-      model: this.selectedModel,
-    };
-    await this.store.saveSelection(selection);
-  }
-
   private renderHtml(webview: vscode.Webview): string {
     const nonce = String(Date.now());
     return `<!DOCTYPE html>
@@ -577,12 +830,42 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       top: 0;
       z-index: 10;
       display: flex;
-      justify-content: flex-end;
+      justify-content: space-between;
       align-items: center;
       gap: 6px;
       padding: 8px 12px 6px;
       background: rgba(7, 8, 10, 0.72);
       backdrop-filter: blur(12px);
+    }
+    .toolbar-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .toolbar-left {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+    }
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: none;
+    }
+    .screen {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .screen.hidden {
+      display: none;
     }
     select, input, button, textarea {
       border: 1px solid var(--stroke);
@@ -1003,6 +1286,71 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       border-color: rgba(85, 179, 255, 0.18);
       background: linear-gradient(180deg, rgba(85, 179, 255, 0.14), rgba(85, 179, 255, 0.08));
     }
+    .session-list {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .session-item {
+      width: 100%;
+      text-align: left;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--stroke-soft);
+      background: rgba(16, 17, 17, 0.88);
+      box-shadow: var(--ring);
+    }
+    .session-item-shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+    }
+    .session-item-main {
+      min-width: 0;
+      border: none;
+      background: transparent;
+      box-shadow: none;
+      padding: 0;
+      text-align: left;
+      color: inherit;
+    }
+    .session-item-delete {
+      width: 28px;
+      min-width: 28px;
+      height: 28px;
+      min-height: 28px;
+      margin: -2px -2px 0 0;
+    }
+    .session-item-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .session-item-preview {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+    }
+    .session-item-meta {
+      margin-top: 8px;
+      color: var(--dim);
+      font-size: 11px;
+    }
+    .session-list-empty {
+      margin: auto 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
     pre {
       margin: 8px 0;
       padding: 10px;
@@ -1018,12 +1366,40 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
   </style>
 </head>
 <body>
-  <div class="toolbar">
-    <button id="clear" class="icon-button" type="button" aria-label="Clear chat" title="Clear chat"></button>
-    <button id="export" class="icon-button" type="button" aria-label="Export chat" title="Export chat"></button>
-    <button id="settings" class="icon-button" type="button" aria-label="Open settings" title="Open settings"></button>
-  </div>
-  <div id="messages"></div>
+  <section id="chatScreen" class="screen">
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <button id="goBack" class="icon-button" type="button" aria-label="Go back" title="Go back"></button>
+        <div id="sessionTitle" class="toolbar-title">New Chat</div>
+      </div>
+      <div class="toolbar-actions">
+        <button id="clear" class="icon-button" type="button" aria-label="Clear chat" title="Clear chat"></button>
+        <button id="export" class="icon-button" type="button" aria-label="Export chat" title="Export chat"></button>
+        <button id="settings" class="icon-button" type="button" aria-label="Open settings" title="Open settings"></button>
+      </div>
+    </div>
+    <div id="messages"></div>
+    <div id="modelPicker" class="model-picker hidden"></div>
+    <div class="input">
+      <div id="selectionContext" class="selection-context hidden"></div>
+      <div class="input-shell">
+        <textarea id="input" placeholder="Ask Sidekick..."></textarea>
+        <div class="model-row">
+          <button id="modelPickerBtn">Model: -</button>
+          <button id="stop" class="stop-btn" aria-label="Send" title="Send" type="button"></button>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section id="sessionListScreen" class="screen hidden">
+    <div class="toolbar">
+      <div class="toolbar-title">Sessions</div>
+      <div class="toolbar-actions">
+        <button id="newSession" class="icon-button" type="button" aria-label="New chat" title="New chat"></button>
+      </div>
+    </div>
+    <div id="sessionList" class="session-list"></div>
+  </section>
   <div id="drawerBackdrop" class="drawer-backdrop"></div>
   <aside id="rawDrawer" class="raw-drawer" aria-hidden="true">
     <div class="raw-drawer-head">
@@ -1035,19 +1411,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="rawDrawerBody" class="raw-drawer-body"></div>
   </aside>
-  <div id="modelPicker" class="model-picker hidden"></div>
-  <div class="input">
-    <div id="selectionContext" class="selection-context hidden"></div>
-    <div class="input-shell">
-      <textarea id="input" placeholder="Ask Sidekick..."></textarea>
-      <div class="model-row">
-        <button id="modelPickerBtn">Model: -</button>
-        <button id="stop" class="stop-btn" aria-label="Send" title="Send" type="button"></button>
-      </div>
-    </div>
-  </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    const chatScreen = document.getElementById('chatScreen');
+    const sessionListScreen = document.getElementById('sessionListScreen');
+    const sessionTitle = document.getElementById('sessionTitle');
+    const sessionList = document.getElementById('sessionList');
     const messages = document.getElementById('messages');
     const modelPicker = document.getElementById('modelPicker');
     const modelPickerBtn = document.getElementById('modelPickerBtn');
@@ -1059,7 +1428,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const rawDrawerMeta = document.getElementById('rawDrawerMeta');
     const rawDrawerClose = document.getElementById('rawDrawerClose');
     const drawerBackdrop = document.getElementById('drawerBackdrop');
+    const goBackBtn = document.getElementById('goBack');
+    const newSessionBtn = document.getElementById('newSession');
+    const clearBtn = document.getElementById('clear');
+    const exportBtn = document.getElementById('export');
+    const settingsBtn = document.getElementById('settings');
     const icons = {
+      trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>',
+      plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>',
+      back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>',
       clear: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path></svg>',
       export: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="M8 11l4 4 4-4"></path><path d="M4 21h16"></path></svg>',
       settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.5 1z"></path></svg>',
@@ -1072,8 +1449,12 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14"></path><path d="M16 5v14"></path></svg>'
     };
     let providers = [];
+    let sessions = [];
+    let activeSessionId = '';
     let activeProviderId = '';
     let activeModelId = '';
+    let currentView = 'chat';
+    let pendingView = '';
     let inProgress = null;
     let isRunning = false;
     const toolCards = new Map();
@@ -1082,6 +1463,89 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       button.innerHTML = icons[icon];
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
+    }
+
+    function showView(view) {
+      currentView = view;
+      chatScreen.classList.toggle('hidden', view !== 'chat');
+      sessionListScreen.classList.toggle('hidden', view !== 'list');
+      vscode.postMessage({ type: 'view', view });
+      if (view !== 'chat') {
+        modelPicker.classList.add('hidden');
+        closeRawDrawer();
+      }
+    }
+
+    function formatUpdatedAt(timestamp) {
+      if (!timestamp) {
+        return '';
+      }
+      const date = new Date(timestamp);
+      const now = new Date();
+      const isToday = date.toDateString() === now.toDateString();
+      return isToday
+        ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+
+    function renderSessionList() {
+      sessionList.innerHTML = '';
+      if (!Array.isArray(sessions) || sessions.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'session-list-empty';
+        empty.textContent = 'No chats yet';
+        sessionList.appendChild(empty);
+        return;
+      }
+
+      sessions.forEach((item) => {
+        const itemShell = document.createElement('div');
+        itemShell.className = 'session-item session-item-shell';
+
+        const button = document.createElement('button');
+        button.className = 'session-item-main';
+        button.type = 'button';
+        button.onclick = () => {
+          pendingView = 'chat';
+          vscode.postMessage({ type: 'open-session', sessionId: item.id });
+        };
+
+        const title = document.createElement('div');
+        title.className = 'session-item-title';
+        title.textContent = item.title || 'New Chat';
+
+        const preview = document.createElement('div');
+        preview.className = 'session-item-preview';
+        preview.textContent = item.preview || 'No messages yet';
+
+        const meta = document.createElement('div');
+        meta.className = 'session-item-meta';
+        meta.textContent = formatUpdatedAt(item.updatedAt);
+
+        button.appendChild(title);
+        button.appendChild(preview);
+        button.appendChild(meta);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'icon-button session-item-delete';
+        deleteBtn.type = 'button';
+        setIconButton(deleteBtn, 'trash', 'Delete chat');
+        deleteBtn.onclick = (event) => {
+          event.stopPropagation();
+          vscode.postMessage({ type: 'delete-session', sessionId: item.id });
+        };
+
+        itemShell.appendChild(button);
+        itemShell.appendChild(deleteBtn);
+        sessionList.appendChild(itemShell);
+      });
+    }
+
+    function applySessionMeta(msg) {
+      sessions = Array.isArray(msg.sessions) ? msg.sessions : [];
+      activeSessionId = msg.activeSessionId || '';
+      sessionTitle.textContent = msg.activeSessionTitle || 'New Chat';
+      renderSessionList();
     }
 
     function syncInputHeight() {
@@ -1330,7 +1794,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       messages.scrollTop = messages.scrollHeight;
     }
 
-    function setSelection(preferredProviderId, preferredModelId) {
+    function setSelection(preferredProviderId, preferredModelId, shouldEmit) {
       const provider = providers.find((item) => item.id === preferredProviderId) || providers[0];
       activeProviderId = provider ? provider.id : '';
 
@@ -1342,7 +1806,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         activeModelId = selected.id;
       }
 
-      emitSelection();
+      if (shouldEmit) {
+        emitSelection();
+      }
       updateModelButton();
       renderModelPicker();
     }
@@ -1436,15 +1902,22 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       modelPicker.classList.toggle('hidden');
     };
 
-    setIconButton(document.getElementById('clear'), 'clear', 'Clear chat');
-    setIconButton(document.getElementById('export'), 'export', 'Export chat');
-    setIconButton(document.getElementById('settings'), 'settings', 'Open settings');
+    setIconButton(goBackBtn, 'back', 'Go back');
+    setIconButton(newSessionBtn, 'plus', 'New chat');
+    setIconButton(clearBtn, 'clear', 'Clear chat');
+    setIconButton(exportBtn, 'export', 'Export chat');
+    setIconButton(settingsBtn, 'settings', 'Open settings');
     setIconButton(rawDrawerClose, 'close', 'Close raw messages');
     setIconButton(stopBtn, 'send', 'Send');
 
-    document.getElementById('clear').onclick = () => vscode.postMessage({ type: 'clear' });
-    document.getElementById('export').onclick = () => vscode.postMessage({ type: 'export' });
-    document.getElementById('settings').onclick = () => vscode.postMessage({ type: 'open-settings' });
+    goBackBtn.onclick = () => showView('list');
+    newSessionBtn.onclick = () => {
+      pendingView = 'chat';
+      vscode.postMessage({ type: 'new-session' });
+    };
+    clearBtn.onclick = () => vscode.postMessage({ type: 'clear' });
+    exportBtn.onclick = () => vscode.postMessage({ type: 'export' });
+    settingsBtn.onclick = () => vscode.postMessage({ type: 'open-settings' });
     stopBtn.onclick = () => {
       if (isRunning) {
         vscode.postMessage({ type: 'stop' });
@@ -1463,25 +1936,36 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
-      if (msg.type === 'history') {
+      if (msg.type === 'hydrate') {
         messages.innerHTML = '';
         toolCards.clear();
+        inProgress = null;
+        setRunState(false);
         providers = Array.isArray(msg.providers) ? msg.providers : [];
+        applySessionMeta(msg);
         for (const item of msg.history || []) {
-        if (item.kind === 'tool_activity') {
-          appendToolActivity(item.id || item.name, item.phase, item.name, item.detail);
-        } else {
-          append(
-            item.role,
-            item.content,
-            item.rawMessageBatches,
-            item.rawMessages,
-            item.id,
-            item.parts
-          );
+          if (item.kind === 'tool_activity') {
+            appendToolActivity(item.id || item.name, item.phase, item.name, item.detail);
+          } else {
+            append(
+              item.role,
+              item.content,
+              item.rawMessageBatches,
+              item.rawMessages,
+              item.id,
+              item.parts
+            );
+          }
         }
+        setSelection(msg.profileProviderId || '', msg.profileModel || '', false);
+        showView(pendingView || msg.currentView || currentView);
+        pendingView = '';
       }
-        setSelection(msg.profileProviderId || '', msg.profileModel || '');
+
+      if (msg.type === 'session-meta') {
+        applySessionMeta(msg);
+        setSelection(msg.profileProviderId || '', msg.profileModel || '', false);
+        currentView = msg.currentView || currentView;
       }
 
       if (msg.type === 'selection-context') {
@@ -1545,6 +2029,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       if (msg.type === 'seed') {
+        showView('chat');
         input.value = msg.text;
         syncInputHeight();
         input.focus();
@@ -1557,6 +2042,52 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+function sanitizeSessionTitle(raw: string): string {
+  return raw
+    .replace(/^```[\w-]*\s*/g, "")
+    .replace(/```$/g, "")
+    .replace(/["'`]/g, "")
+    .split(/\r?\n/)[0]
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 60);
+}
+
+function buildNoThinkingParams(
+  provider: ProviderConfig | undefined,
+  model: string | undefined
+): Record<string, unknown> {
+  if (!provider) {
+    return {};
+  }
+
+  const vendor = detectVendor(provider, model);
+
+  if (provider.apiType === "anthropic-messages") {
+    return {
+      thinking: { type: "disabled" },
+    };
+  }
+
+  if (vendor === "glm") {
+    return {
+      thinking: { type: "disabled" },
+      enable_thinking: false,
+    };
+  }
+
+  if (vendor === "qwen") {
+    return {
+      enable_thinking: false,
+    };
+  }
+
+  return {
+    reasoning: { effort: "low" },
+    reasoning_effort: "low",
+  };
 }
 
 function detectVendor(

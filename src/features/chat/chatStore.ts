@@ -43,8 +43,40 @@ export interface ToolActivityHistoryItem {
 
 export type ChatHistoryItem = ChatMessage | ToolActivityHistoryItem;
 
-const HISTORY_KEY = "sidekick.chat.history";
-const SELECTION_KEY = "sidekick.chat.selection";
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  providerId: string;
+  model?: string;
+  history: ChatHistoryItem[];
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  preview: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ChatStoreState {
+  sessions: ChatSession[];
+  activeSessionId: string;
+  currentView: ChatView;
+  migrated: boolean;
+}
+
+export type ChatView = "chat" | "list";
+
+export const DEFAULT_SESSION_TITLE = "New Chat";
+
+const SESSIONS_KEY = "sidekick.chat.sessions";
+const ACTIVE_SESSION_KEY = "sidekick.chat.activeSessionId";
+const CURRENT_VIEW_KEY = "sidekick.chat.currentView";
+const LEGACY_HISTORY_KEY = "sidekick.chat.history";
+const LEGACY_SELECTION_KEY = "sidekick.chat.selection";
 
 export interface ChatSelectionState {
   providerId: string;
@@ -54,60 +86,221 @@ export interface ChatSelectionState {
 export class ChatStore {
   constructor(private readonly context: vscode.ExtensionContext) {}
 
-  getHistory(): ChatHistoryItem[] {
-    const raw = this.context.workspaceState.get<any[]>(HISTORY_KEY, []);
-    return (raw || [])
-      .map((item) => {
-        if (item?.kind === "tool_activity") {
-          return item as ToolActivityHistoryItem;
-        }
-        if (item?.kind === "message") {
-          return {
-            ...(item as ChatMessage),
-            id: String(item.id || buildHistoryId("message")),
-            parts: normalizeParts(item.parts),
-            rawMessages: normalizeRawMessages(item.rawMessages),
-            rawMessageBatches: normalizeRawMessageBatches(item.rawMessageBatches),
-            workspaceMutations: normalizeWorkspaceMutations(item.workspaceMutations),
-          } as ChatMessage;
-        }
-        if (item?.role === "user" || item?.role === "assistant") {
-          return {
-            id: buildHistoryId("message"),
-            kind: "message",
-            role: item.role,
-            content: String(item.content || ""),
-            timestamp: Number(item.timestamp || Date.now()),
-            parts: normalizeParts(item.parts),
-            rawMessages: normalizeRawMessages(item.rawMessages),
-            rawMessageBatches: normalizeRawMessageBatches(item.rawMessageBatches),
-            workspaceMutations: normalizeWorkspaceMutations(item.workspaceMutations),
-          } as ChatMessage;
-        }
-        return undefined;
-      })
-      .filter((item): item is ChatHistoryItem => Boolean(item));
+  loadState(defaultProviderId: string, defaultModel?: string): ChatStoreState {
+    const rawSessions = this.context.workspaceState.get<unknown[]>(SESSIONS_KEY, []);
+    const sessions = normalizeSessions(rawSessions);
+    const activeSessionId = String(
+      this.context.workspaceState.get<string>(ACTIVE_SESSION_KEY, "") || ""
+    );
+    const currentView = normalizeView(
+      this.context.workspaceState.get<unknown>(CURRENT_VIEW_KEY, "chat")
+    );
+
+    if (sessions.length > 0) {
+      return {
+        sessions,
+        activeSessionId: resolveActiveSessionId(sessions, activeSessionId),
+        currentView,
+        migrated: false,
+      };
+    }
+
+    const legacyHistory = normalizeHistoryItems(
+      this.context.workspaceState.get<unknown[]>(LEGACY_HISTORY_KEY, [])
+    );
+    const legacySelection = this.context.workspaceState.get<ChatSelectionState | undefined>(
+      LEGACY_SELECTION_KEY
+    );
+    const fallbackProviderId = legacySelection?.providerId || defaultProviderId;
+    const fallbackModel = legacySelection?.model || defaultModel;
+
+    if (legacyHistory.length > 0) {
+      const migratedSession = createSession(
+        fallbackProviderId,
+        fallbackModel,
+        DEFAULT_SESSION_TITLE,
+        legacyHistory
+      );
+      return {
+        sessions: [migratedSession],
+        activeSessionId: migratedSession.id,
+        currentView,
+        migrated: true,
+      };
+    }
+
+    const initialSession = createSession(
+      defaultProviderId,
+      defaultModel,
+      DEFAULT_SESSION_TITLE,
+      []
+    );
+    return {
+      sessions: [initialSession],
+      activeSessionId: initialSession.id,
+      currentView,
+      migrated: true,
+    };
   }
 
-  async saveHistory(history: ChatHistoryItem[]): Promise<void> {
-    await this.context.workspaceState.update(HISTORY_KEY, history);
+  async saveState(
+    sessions: ChatSession[],
+    activeSessionId: string,
+    currentView: ChatView
+  ): Promise<void> {
+    await Promise.all([
+      this.context.workspaceState.update(SESSIONS_KEY, sessions),
+      this.context.workspaceState.update(ACTIVE_SESSION_KEY, activeSessionId),
+      this.context.workspaceState.update(CURRENT_VIEW_KEY, currentView),
+    ]);
   }
 
-  async clear(): Promise<void> {
-    await this.context.workspaceState.update(HISTORY_KEY, []);
+  async saveSessions(sessions: ChatSession[]): Promise<void> {
+    await this.context.workspaceState.update(SESSIONS_KEY, sessions);
   }
 
-  getSelection(): ChatSelectionState | undefined {
-    return this.context.workspaceState.get<ChatSelectionState>(SELECTION_KEY);
+  async saveActiveSessionId(activeSessionId: string): Promise<void> {
+    await this.context.workspaceState.update(ACTIVE_SESSION_KEY, activeSessionId);
   }
 
-  async saveSelection(selection: ChatSelectionState): Promise<void> {
-    await this.context.workspaceState.update(SELECTION_KEY, selection);
+  async saveCurrentView(currentView: ChatView): Promise<void> {
+    await this.context.workspaceState.update(CURRENT_VIEW_KEY, currentView);
   }
 }
 
 export function buildHistoryId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function createSession(
+  providerId: string,
+  model: string | undefined,
+  title: string,
+  history: ChatHistoryItem[]
+): ChatSession {
+  const now = Date.now();
+  return {
+    id: buildHistoryId("session"),
+    title: String(title || DEFAULT_SESSION_TITLE),
+    createdAt: now,
+    updatedAt: deriveUpdatedAt(history, now),
+    providerId,
+    model,
+    history,
+  };
+}
+
+export function summarizeSession(session: ChatSession): ChatSessionSummary {
+  const latestMessage = [...session.history]
+    .reverse()
+    .find((item): item is ChatMessage => item.kind === "message");
+
+  return {
+    id: session.id,
+    title: session.title || DEFAULT_SESSION_TITLE,
+    preview: buildSessionPreview(latestMessage),
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+function buildSessionPreview(message: ChatMessage | undefined): string {
+  if (!message) {
+    return "No messages yet";
+  }
+  return message.content.replace(/\s+/g, " ").trim().slice(0, 80) || "No messages yet";
+}
+
+function resolveActiveSessionId(sessions: ChatSession[], activeSessionId: string): string {
+  if (sessions.some((session) => session.id === activeSessionId)) {
+    return activeSessionId;
+  }
+  return sessions[0]?.id || "";
+}
+
+function normalizeView(raw: unknown): ChatView {
+  return raw === "list" ? "list" : "chat";
+}
+
+function normalizeSessions(raw: unknown): ChatSession[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .map((item) => normalizeSession(item))
+    .filter((item): item is ChatSession => Boolean(item));
+}
+
+function normalizeSession(raw: unknown): ChatSession | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const history = normalizeHistoryItems((raw as { history?: unknown }).history);
+  const createdAt = Number((raw as { createdAt?: unknown }).createdAt || Date.now());
+  const updatedAt = Number(
+    (raw as { updatedAt?: unknown }).updatedAt || deriveUpdatedAt(history, createdAt)
+  );
+  const providerId = String((raw as { providerId?: unknown }).providerId || "").trim();
+  if (!providerId) {
+    return undefined;
+  }
+
+  return {
+    id: String((raw as { id?: unknown }).id || buildHistoryId("session")),
+    title: String((raw as { title?: unknown }).title || DEFAULT_SESSION_TITLE),
+    createdAt,
+    updatedAt,
+    providerId,
+    model:
+      typeof (raw as { model?: unknown }).model === "string"
+        ? (raw as { model: string }).model
+        : undefined,
+    history,
+  };
+}
+
+function deriveUpdatedAt(history: ChatHistoryItem[], fallback: number): number {
+  return history.reduce((latest, item) => Math.max(latest, item.timestamp), fallback);
+}
+
+function normalizeHistoryItems(raw: unknown): ChatHistoryItem[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .map((item) => {
+      if (item?.kind === "tool_activity") {
+        return item as ToolActivityHistoryItem;
+      }
+      if (item?.kind === "message") {
+        return {
+          ...(item as ChatMessage),
+          id: String(item.id || buildHistoryId("message")),
+          parts: normalizeParts(item.parts),
+          rawMessages: normalizeRawMessages(item.rawMessages),
+          rawMessageBatches: normalizeRawMessageBatches(item.rawMessageBatches),
+          workspaceMutations: normalizeWorkspaceMutations(item.workspaceMutations),
+        } as ChatMessage;
+      }
+      if (item?.role === "user" || item?.role === "assistant") {
+        return {
+          id: buildHistoryId("message"),
+          kind: "message",
+          role: item.role,
+          content: String(item.content || ""),
+          timestamp: Number(item.timestamp || Date.now()),
+          parts: normalizeParts(item.parts),
+          rawMessages: normalizeRawMessages(item.rawMessages),
+          rawMessageBatches: normalizeRawMessageBatches(item.rawMessageBatches),
+          workspaceMutations: normalizeWorkspaceMutations(item.workspaceMutations),
+        } as ChatMessage;
+      }
+      return undefined;
+    })
+    .filter((item): item is ChatHistoryItem => Boolean(item));
 }
 
 function normalizeParts(raw: unknown): ChatMessagePart[] | undefined {
@@ -121,15 +314,16 @@ function normalizeParts(raw: unknown): ChatMessagePart[] | undefined {
         return undefined;
       }
 
-      const id = typeof (item as { id?: unknown }).id === "string"
-        ? (item as { id: string }).id
-        : buildHistoryId("part");
+      const id =
+        typeof (item as { id?: unknown }).id === "string"
+          ? (item as { id: string }).id
+          : buildHistoryId("part");
       const type = (item as { type?: unknown }).type;
       const synthetic = Boolean((item as { synthetic?: unknown }).synthetic);
       const metadata =
         (item as { metadata?: unknown }).metadata &&
         typeof (item as { metadata?: unknown }).metadata === "object"
-          ? ((item as { metadata: Record<string, unknown> }).metadata)
+          ? (item as { metadata: Record<string, unknown> }).metadata
           : undefined;
 
       if (type === "text" && typeof (item as { text?: unknown }).text === "string") {
@@ -231,7 +425,7 @@ function normalizeLlmContent(raw: unknown): string | LlmContentPart[] | undefine
           synthetic: Boolean((item as { synthetic?: unknown }).synthetic),
           metadata:
             typeof (item as { metadata?: unknown }).metadata === "object"
-              ? ((item as { metadata?: Record<string, unknown> }).metadata ?? undefined)
+              ? (item as { metadata?: Record<string, unknown> }).metadata ?? undefined
               : undefined,
         } as LlmContentPart;
       }
@@ -249,7 +443,7 @@ function normalizeLlmContent(raw: unknown): string | LlmContentPart[] | undefine
           synthetic: Boolean((item as { synthetic?: unknown }).synthetic),
           metadata:
             typeof (item as { metadata?: unknown }).metadata === "object"
-              ? ((item as { metadata?: Record<string, unknown> }).metadata ?? undefined)
+              ? (item as { metadata?: Record<string, unknown> }).metadata ?? undefined
               : undefined,
         } as LlmContentPart;
       }
@@ -271,9 +465,10 @@ function normalizeRawMessageBatches(raw: unknown): RawMessageBatch[] | undefined
         return undefined;
       }
 
-      const title = typeof (item as { title?: unknown }).title === "string"
-        ? (item as { title: string }).title
-        : "Raw Messages";
+      const title =
+        typeof (item as { title?: unknown }).title === "string"
+          ? (item as { title: string }).title
+          : "Raw Messages";
       const messages = normalizeRawMessages((item as { messages?: unknown }).messages);
       if (!messages || messages.length === 0) {
         return undefined;
@@ -286,9 +481,7 @@ function normalizeRawMessageBatches(raw: unknown): RawMessageBatch[] | undefined
   return batches.length > 0 ? batches : undefined;
 }
 
-function normalizeWorkspaceMutations(
-  raw: unknown
-): WorkspaceMutation[] | undefined {
+function normalizeWorkspaceMutations(raw: unknown): WorkspaceMutation[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
   }
