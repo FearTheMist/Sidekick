@@ -1,7 +1,7 @@
 {
   "name": "sidekick-ai-code-assistant",
   "displayName": "Sidekick - AI Code Assistant",
-  "description": "A starter VS Code extension with configurable LLM chat panel.",
+  "description": "A VS Code AI coding assistant with multi-session chat, inline completion, and configurable LLM providers.",
   "icon": "media/icon.png",
   "version": "0.0.4",
   "publisher": "Lydia",
