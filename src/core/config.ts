@@ -9,6 +9,8 @@ export interface McpServerConfig {
   enabled?: boolean;
 }
 
+export type CommitMessageLanguage = "auto" | "zh-CN" | "en";
+
 const SECTION = "sidekick";
 
 const DEFAULT_PROVIDERS: ProviderConfig[] = [
@@ -67,6 +69,8 @@ const DEFAULT_AGENT_PROFILE: ModelProfile = {
   maxTokens: 4096,
 };
 
+const DEFAULT_COMMIT_MESSAGE_LANGUAGE: CommitMessageLanguage = "auto";
+
 export class SidekickConfig {
   static getProviderSettings(): ProviderConfig[] {
     return (
@@ -105,5 +109,20 @@ export class SidekickConfig {
         .getConfiguration(SECTION)
         .get<McpServerConfig[]>("mcpServers", []) || []
     );
+  }
+
+  static getCommitMessageLanguage(): CommitMessageLanguage {
+    const value = vscode.workspace
+      .getConfiguration(SECTION)
+      .get<CommitMessageLanguage>(
+        "commitMessageLanguage",
+        DEFAULT_COMMIT_MESSAGE_LANGUAGE
+      );
+
+    if (value === "zh-CN" || value === "en") {
+      return value;
+    }
+
+    return "auto";
   }
 }

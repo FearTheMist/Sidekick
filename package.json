@@ -3,7 +3,7 @@
   "displayName": "Sidekick - AI Code Assistant",
   "description": "A VS Code AI coding assistant with multi-session chat, inline completion, and configurable LLM providers.",
   "icon": "media/icon.png",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "Lydia",
   "repository":{
     "type": "git",
@@ -33,7 +33,11 @@
       },
       {
         "command": "sidekick.openSettings",
-        "title": "Sidekick: Open Settings"
+        "title": "Sidekick: Open Settings",
+        "icon": {
+          "light": "media/settings-light.svg",
+          "dark": "media/settings-dark.svg"
+        }
       },
       {
         "command": "sidekick.explainCode",
@@ -136,6 +140,13 @@
           "group": "navigation@54",
           "when": "editorTextFocus"
         }
+      ],
+      "view/title": [
+        {
+          "command": "sidekick.openSettings",
+          "group": "navigation@90",
+          "when": "view == sidekick.chatView"
+        }
       ]
     },
     "keybindings": [
@@ -217,6 +228,21 @@
           "type": "array",
           "default": [],
           "description": "MCP servers. Example: [{\"name\":\"filesystem\",\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\",\".\"],\"enabled\":true}]"
+        },
+        "sidekick.commitMessageLanguage": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "zh-CN",
+            "en"
+          ],
+          "default": "auto",
+          "markdownDescription": "Language for generated commit messages. `auto` follows recent commit history when possible, otherwise infers from the diff.",
+          "enumItemLabels": [
+            "Auto",
+            "中文",
+            "English"
+          ]
         }
       }
     }

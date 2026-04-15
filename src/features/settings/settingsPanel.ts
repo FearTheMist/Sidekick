@@ -1,11 +1,14 @@
 import * as vscode from "vscode";
-import { SidekickConfig } from "../../core/config";
+import {
+  CommitMessageLanguage,
+  SidekickConfig,
+} from "../../core/config";
 import { ModelEndpointType, ProviderConfig } from "../../core/llm";
 
 export async function openSettingsPanel(): Promise<void> {
   const panel = vscode.window.createWebviewPanel(
     "sidekickProviderSettings",
-    "Sidekick Model Providers",
+    "Sidekick Settings",
     vscode.ViewColumn.One,
     {
       enableScripts: true,
@@ -19,28 +22,53 @@ export async function openSettingsPanel(): Promise<void> {
   panel.webview.onDidReceiveMessage(async (message: unknown) => {
     const payload = message as
       | { type: "load" }
-      | { type: "save"; providers?: ProviderConfig[] };
+      | {
+          type: "save";
+          providers?: ProviderConfig[];
+          commitMessageLanguage?: CommitMessageLanguage;
+        };
 
     if (payload.type === "load") {
       panel.webview.postMessage({
         type: "state",
         providers: SidekickConfig.getProviderSettings(),
+        commitMessageLanguage: SidekickConfig.getCommitMessageLanguage(),
       });
       return;
     }
 
     if (payload.type === "save") {
       const providers = sanitizeProviders(payload.providers || []);
+      const commitMessageLanguage = sanitizeCommitMessageLanguage(
+        payload.commitMessageLanguage
+      );
       const cfg = vscode.workspace.getConfiguration("sidekick");
       await cfg.update(
         "providers",
         providers,
         vscode.ConfigurationTarget.Workspace
       );
+      await cfg.update(
+        "commitMessageLanguage",
+        commitMessageLanguage,
+        vscode.ConfigurationTarget.Workspace
+      );
       vscode.window.showInformationMessage("Sidekick provider settings saved.");
-      panel.webview.postMessage({ type: "state", providers });
+      panel.webview.postMessage({
+        type: "state",
+        providers,
+        commitMessageLanguage,
+      });
     }
   });
+}
+
+function sanitizeCommitMessageLanguage(value: unknown): CommitMessageLanguage {
+  if (value === "zh-CN" || value === "en") {
+    return value;
+  }
+
+  return "auto";
 }
 
 function sanitizeProviders(input: ProviderConfig[]): ProviderConfig[] {
@@ -357,6 +385,16 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         </div>
 
         <div class="field">
+          <label>Commit Message Language</label>
+          <select id="commitMessageLanguage">
+            <option value="auto">Auto</option>
+            <option value="zh-CN">中文</option>
+            <option value="en">English</option>
+          </select>
+          <div class="hint">Auto follows recent commit history when clear, otherwise infers from the diff.</div>
+        </div>
+
+        <div class="field">
           <label>Models</label>
           <table>
             <thead>
@@ -389,12 +427,13 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       'ANTHROPIC_MESSAGES'
     ];
 
-    let state = { providers: [], selectedIndex: -1 };
+    let state = { providers: [], selectedIndex: -1, commitMessageLanguage: 'auto' };
 
     const providerList = document.getElementById('providerList');
     const providerName = document.getElementById('providerName');
     const baseUrl = document.getElementById('baseUrl');
     const apiKey = document.getElementById('apiKey');
+    const commitMessageLanguage = document.getElementById('commitMessageLanguage');
     const toggleApiKey = document.getElementById('toggleApiKey');
     const modelRows = document.getElementById('modelRows');
     const visibleApiKeyIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
@@ -468,6 +507,8 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     }
 
     function renderForm() {
+      commitMessageLanguage.value = state.commitMessageLanguage || 'auto';
+
       const provider = selectedProvider();
       if (!provider) {
         providerName.value = '';
@@ -533,6 +574,8 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     }
 
     function syncFormToState() {
+      state.commitMessageLanguage = commitMessageLanguage.value || 'auto';
+
       const provider = selectedProvider();
       if (!provider) return;
       const name = providerName.value.trim();
@@ -606,13 +649,21 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
 
     document.getElementById('save').onclick = () => {
       syncFormToState();
-      vscode.postMessage({ type: 'save', providers: state.providers });
+      vscode.postMessage({
+        type: 'save',
+        providers: state.providers,
+        commitMessageLanguage: state.commitMessageLanguage,
+      });
     };
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
       if (msg.type !== 'state') return;
       state.providers = Array.isArray(msg.providers) ? msg.providers : [];
+      state.commitMessageLanguage =
+        msg.commitMessageLanguage === 'zh-CN' || msg.commitMessageLanguage === 'en'
+          ? msg.commitMessageLanguage
+          : 'auto';
       if (state.providers.length > 0 && state.selectedIndex < 0) {
         state.selectedIndex = 0;
       }

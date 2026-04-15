@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import { SidekickConfig } from "./core/config";
+import { CommitMessageLanguage, SidekickConfig } from "./core/config";
 import { LlmGateway, ProviderConfig } from "./core/llm";
 import { ChatPanelProvider } from "./features/chat/chatPanel";
 import { SidekickInlineCompletionProvider } from "./features/inline/inlineProvider";
@@ -281,6 +281,9 @@ async function generateCommitMessage(
         "- Prefer format: type(scope): subject",
         "- Mention intent and impact briefly",
         "- Max 72 chars for subject, optional short body after blank line",
+        ...getCommitMessageLanguageInstructions(
+          SidekickConfig.getCommitMessageLanguage()
+        ),
         "",
         "Recent commit style:",
         recent,
@@ -336,6 +339,23 @@ function truncateForLlm(text: string, maxChars: number): string {
     return text;
   }
   return `${text.slice(0, maxChars)}\n...[truncated]`;
+}
+
+function getCommitMessageLanguageInstructions(
+  language: CommitMessageLanguage
+): string[] {
+  if (language === "zh-CN") {
+    return ["- Write the commit message in Simplified Chinese"];
+  }
+
+  if (language === "en") {
+    return ["- Write the commit message in English"];
+  }
+
+  return [
+    "- Use the same language as the recent commit style when it is clear",
+    "- If the recent commit language is unclear, infer the best language from the diff",
+  ];
 }
 
 function sanitizeCommitMessage(raw: string): string {
