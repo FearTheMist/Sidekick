@@ -4,9 +4,12 @@ Sidekick is a VS Code AI coding assistant focused on three things: sidebar chat,
 
 It is designed for teams that want to connect their own model providers instead of being locked to a single hosted backend.
 
+The sidebar experience is built around persistent multi-session chat, per-session model selection, raw message inspection, and editor-aware context so you can move between ongoing tasks without losing state.
+
 ## What Sidekick Does
 
 - Adds a dedicated Sidekick chat panel to the VS Code activity bar
+- Supports multi-session chat with a dedicated session list and persistent history
 - Provides inline code completion inside the editor
 - Lets you send selected code to AI actions such as explain, refactor, bug fixing, test generation, and documentation
 - Generates commit message drafts from your Git changes
@@ -21,10 +24,14 @@ Open the Sidekick panel from the activity bar to chat with the configured model.
 
 The chat flow includes:
 
+- multiple chat sessions with automatic session titles
+- session list, create, switch, and delete flows
 - workspace and editor context collection
-- provider and model selection
-- persistent chat history
+- provider and model selection per session
+- persistent chat history and last-opened view state
 - export and clear actions
+- raw message and message-part inspection
+- reset-to-step for earlier user messages
 - settings entry from the panel
 
 ### Inline Completion
@@ -103,4 +110,3 @@ To run the extension locally:
 1. Install dependencies.
 2. Run `npm run compile`.
 3. Launch the extension in the VS Code Extension Development Host.
-
