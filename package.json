@@ -3,7 +3,7 @@
   "displayName": "Sidekick - AI Code Assistant",
   "description": "A starter VS Code extension with configurable LLM chat panel.",
   "icon": "media/icon.png",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "Lydia",
   "repository":{
     "type": "git",
