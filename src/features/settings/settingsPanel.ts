@@ -53,11 +53,8 @@ export async function openSettingsPanel(): Promise<void> {
         commitMessageLanguage,
         vscode.ConfigurationTarget.Global
       );
-      vscode.window.showInformationMessage("Sidekick provider settings saved.");
       panel.webview.postMessage({
-        type: "state",
-        providers,
-        commitMessageLanguage,
+        type: "saved",
       });
     }
   });
@@ -225,6 +222,11 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       font-weight: 600;
       letter-spacing: 0.3px;
     }
+    .header-status {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
     .providers { overflow: auto; height: calc(100% - 51px); }
     .provider-item {
       display: grid;
@@ -281,6 +283,19 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       background: var(--red-soft);
     }
     .content { padding: 16px; overflow: auto; height: calc(100% - 51px); }
+    .hidden { display: none !important; }
+    .content.empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+    }
+    .empty-state {
+      max-width: 320px;
+      text-align: center;
+      line-height: 1.6;
+      font-size: 13px;
+    }
     .triple-row { display: grid; grid-template-columns: 1fr 1.4fr 1.2fr; gap: 10px; }
     .field { margin-bottom: 16px; }
     .field label { display: block; margin-bottom: 8px; color: var(--muted); font-size: 12px; font-weight: 500; }
@@ -342,6 +357,29 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       color: #ffc3c3;
       background: var(--red-soft);
     }
+    .context-menu {
+      position: fixed;
+      min-width: 160px;
+      padding: 6px;
+      border: 1px solid var(--stroke-strong);
+      border-radius: 10px;
+      background: rgba(16, 17, 17, 0.98);
+      box-shadow: var(--ring);
+      z-index: 1000;
+    }
+    .context-menu.hidden { display: none; }
+    .context-menu button {
+      width: 100%;
+      min-height: 34px;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    .context-menu button:hover {
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.06);
+    }
     @media (max-width: 980px) {
       .root { grid-template-columns: 1fr; grid-template-rows: 250px 1fr; }
       .triple-row { grid-template-columns: 1fr; }
@@ -360,10 +398,12 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
 
     <section class="panel">
       <div class="header">
-        <strong>Provider Config</strong>
-        <button id="save">Save</button>
+        <strong id="configTitle"></strong>
+        <span id="saveStatus" class="header-status">Auto-saved</span>
       </div>
-      <div class="content">
+      <div id="configContent" class="content">
+        <div id="configEmptyState" class="empty-state hidden">Select a provider to edit its configuration, or add a new provider to get started.</div>
+        <div id="configFormBody">
         <div class="triple-row">
           <div class="field">
             <label>Provider Name</label>
@@ -409,12 +449,16 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
           </table>
           <div class="actions">
             <button id="addModel">+ Add Model</button>
-            <button id="removeProvider" class="danger">Remove Provider</button>
           </div>
           <div class="hint">Endpoint Type: OPENAI, OPENAI_RESPONSE, OPENAI_COMPATIBLE, OPENAI_COMPATIBLE_RESPONSE, ANTHROPIC_MESSAGES.</div>
         </div>
+        </div>
       </div>
     </section>
+  </div>
+
+  <div id="providerContextMenu" class="context-menu hidden">
+    <button id="deleteProviderAction" class="danger" type="button">Delete Provider</button>
   </div>
 
   <script nonce="${nonce}">
@@ -428,17 +472,30 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     ];
 
     let state = { providers: [], selectedIndex: -1, commitMessageLanguage: 'auto' };
+    let saveTimer = undefined;
 
     const providerList = document.getElementById('providerList');
     const providerName = document.getElementById('providerName');
     const baseUrl = document.getElementById('baseUrl');
     const apiKey = document.getElementById('apiKey');
+    const configTitle = document.getElementById('configTitle');
+    const saveStatus = document.getElementById('saveStatus');
+    const configContent = document.getElementById('configContent');
+    const configEmptyState = document.getElementById('configEmptyState');
+    const configFormBody = document.getElementById('configFormBody');
     const commitMessageLanguage = document.getElementById('commitMessageLanguage');
     const toggleApiKey = document.getElementById('toggleApiKey');
     const modelRows = document.getElementById('modelRows');
+    const providerContextMenu = document.getElementById('providerContextMenu');
+    const deleteProviderAction = document.getElementById('deleteProviderAction');
     const visibleApiKeyIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
     const hiddenApiKeyIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 10.7a3 3 0 0 0 4 4"></path><path d="M9.4 5.5A11.4 11.4 0 0 1 12 5c6.4 0 10 7 10 7a18.6 18.6 0 0 1-4 4.8"></path><path d="M6.7 6.7A18.2 18.2 0 0 0 2 12s3.6 7 10 7a10.7 10.7 0 0 0 5.3-1.4"></path></svg>';
     let isApiKeyVisible = false;
+    let contextMenuIndex = -1;
+
+    function setSaveStatus(text) {
+      saveStatus.textContent = text;
+    }
 
     function setApiKeyVisibility(visible) {
       isApiKeyVisible = visible;
@@ -475,6 +532,13 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
           state.selectedIndex = index;
           render();
         };
+        row.oncontextmenu = (event) => {
+          event.preventDefault();
+          syncFormToState();
+          state.selectedIndex = index;
+          render();
+          showContextMenu(event.clientX, event.clientY, index);
+        };
 
         const left = document.createElement('div');
         left.className = 'provider-main';
@@ -498,6 +562,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
           event.stopPropagation();
           provider.enabled = !isOn;
           renderProviders();
+          scheduleSave();
         };
 
         row.appendChild(left);
@@ -511,6 +576,10 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
 
       const provider = selectedProvider();
       if (!provider) {
+        configTitle.textContent = '';
+        configContent.classList.add('empty');
+        configFormBody.classList.add('hidden');
+        configEmptyState.classList.remove('hidden');
         providerName.value = '';
         baseUrl.value = '';
         apiKey.value = '';
@@ -518,6 +587,11 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         modelRows.innerHTML = '';
         return;
       }
+
+      configTitle.textContent = 'Provider Config';
+      configContent.classList.remove('empty');
+      configFormBody.classList.remove('hidden');
+      configEmptyState.classList.add('hidden');
 
       providerName.value = provider.label || provider.id || '';
       baseUrl.value = provider.baseUrl || '';
@@ -532,13 +606,19 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         const tdId = document.createElement('td');
         const idInput = document.createElement('input');
         idInput.value = model.id || '';
-        idInput.oninput = () => { model.id = idInput.value; };
+        idInput.oninput = () => {
+          model.id = idInput.value;
+          scheduleSave();
+        };
         tdId.appendChild(idInput);
 
         const tdName = document.createElement('td');
         const nameInput = document.createElement('input');
         nameInput.value = model.name || '';
-        nameInput.oninput = () => { model.name = nameInput.value; };
+        nameInput.oninput = () => {
+          model.name = nameInput.value;
+          scheduleSave();
+        };
         tdName.appendChild(nameInput);
 
         const tdType = document.createElement('td');
@@ -552,7 +632,10 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
           }
           typeSelect.appendChild(option);
         });
-        typeSelect.onchange = () => { model.endpointType = typeSelect.value; };
+        typeSelect.onchange = () => {
+          model.endpointType = typeSelect.value;
+          scheduleSave();
+        };
         tdType.appendChild(typeSelect);
 
         const tdAction = document.createElement('td');
@@ -562,6 +645,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         removeBtn.onclick = () => {
           provider.models.splice(index, 1);
           renderForm();
+          scheduleSave();
         };
         tdAction.appendChild(removeBtn);
 
@@ -574,6 +658,10 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     }
 
     function syncFormToState() {
+      if (!providerName || !baseUrl || !apiKey || !commitMessageLanguage) {
+        return;
+      }
+
       state.commitMessageLanguage = commitMessageLanguage.value || 'auto';
 
       const provider = selectedProvider();
@@ -597,8 +685,36 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     }
 
     function render() {
+      hideContextMenu();
       renderProviders();
       renderForm();
+    }
+
+    function scheduleSave() {
+      syncFormToState();
+      if (saveTimer) {
+        clearTimeout(saveTimer);
+      }
+      setSaveStatus('Saving...');
+      saveTimer = setTimeout(() => {
+        vscode.postMessage({
+          type: 'save',
+          providers: state.providers,
+          commitMessageLanguage: state.commitMessageLanguage,
+        });
+      }, 300);
+    }
+
+    function showContextMenu(x, y, index) {
+      contextMenuIndex = index;
+      providerContextMenu.style.left = x + 'px';
+      providerContextMenu.style.top = y + 'px';
+      providerContextMenu.classList.remove('hidden');
+    }
+
+    function hideContextMenu() {
+      contextMenuIndex = -1;
+      providerContextMenu.classList.add('hidden');
     }
 
     function escapeHtml(text) {
@@ -623,20 +739,17 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       });
       state.selectedIndex = state.providers.length - 1;
       render();
+      scheduleSave();
     };
 
     toggleApiKey.onclick = () => {
       setApiKeyVisibility(!isApiKeyVisible);
     };
 
-    setApiKeyVisibility(false);
-
-    document.getElementById('removeProvider').onclick = () => {
-      if (state.selectedIndex < 0) return;
-      state.providers.splice(state.selectedIndex, 1);
-      state.selectedIndex = Math.min(state.selectedIndex, state.providers.length - 1);
-      render();
-    };
+    providerName.oninput = () => scheduleSave();
+    baseUrl.oninput = () => scheduleSave();
+    apiKey.oninput = () => scheduleSave();
+    commitMessageLanguage.onchange = () => scheduleSave();
 
     document.getElementById('addModel').onclick = () => {
       syncFormToState();
@@ -645,25 +758,40 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       provider.models = Array.isArray(provider.models) ? provider.models : [];
       provider.models.push({ id: '', name: '', endpointType: 'OPENAI' });
       renderForm();
+      scheduleSave();
     };
 
-    document.getElementById('save').onclick = () => {
-      syncFormToState();
-      vscode.postMessage({
-        type: 'save',
-        providers: state.providers,
-        commitMessageLanguage: state.commitMessageLanguage,
-      });
+    setApiKeyVisibility(false);
+
+    deleteProviderAction.onclick = () => {
+      if (contextMenuIndex < 0) return;
+      state.providers.splice(contextMenuIndex, 1);
+      state.selectedIndex = Math.min(state.selectedIndex, state.providers.length - 1);
+      render();
+      scheduleSave();
     };
+
+    window.addEventListener('click', () => hideContextMenu());
+    window.addEventListener('blur', () => hideContextMenu());
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        hideContextMenu();
+      }
+    });
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
+      if (msg.type === 'saved') {
+        setSaveStatus('Auto-saved');
+        return;
+      }
       if (msg.type !== 'state') return;
       state.providers = Array.isArray(msg.providers) ? msg.providers : [];
       state.commitMessageLanguage =
         msg.commitMessageLanguage === 'zh-CN' || msg.commitMessageLanguage === 'en'
           ? msg.commitMessageLanguage
           : 'auto';
+      setSaveStatus('Auto-saved');
       if (state.providers.length > 0 && state.selectedIndex < 0) {
         state.selectedIndex = 0;
       }
