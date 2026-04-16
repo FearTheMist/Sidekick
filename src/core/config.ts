@@ -13,58 +13,25 @@ export type CommitMessageLanguage = "auto" | "zh-CN" | "en";
 
 const SECTION = "sidekick";
 
-const DEFAULT_PROVIDERS: ProviderConfig[] = [
-  {
-    id: "openaiChat",
-    label: "OpenAI Chat",
-    apiType: "openai-chat",
-    baseUrl: "https://api.openai.com/v1",
-    apiKey: "",
-    defaultModel: "gpt-4o-mini",
-    enabled: true,
-    models: [
-      {
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        endpointType: "OPENAI",
-      },
-    ],
-  },
-  {
-    id: "openaiResponses",
-    label: "OpenAI Responses",
-    apiType: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    apiKey: "",
-    defaultModel: "gpt-4o-mini",
-    enabled: true,
-    models: [
-      {
-        id: "gpt-4o-mini",
-        name: "GPT-4o Mini",
-        endpointType: "OPENAI_RESPONSE",
-      },
-    ],
-  },
-];
+const DEFAULT_PROVIDERS: ProviderConfig[] = [];
 
 const DEFAULT_COMPLETION_PROFILE: ModelProfile = {
-  providerId: "openaiChat",
-  model: "gpt-4o-mini",
+  providerId: "",
+  model: "",
   temperature: 0.2,
   maxTokens: 512,
 };
 
 const DEFAULT_CHAT_PROFILE: ModelProfile = {
-  providerId: "openaiChat",
-  model: "gpt-4o-mini",
+  providerId: "",
+  model: "",
   temperature: 0.3,
   maxTokens: 4096,
 };
 
 const DEFAULT_AGENT_PROFILE: ModelProfile = {
-  providerId: "openaiResponses",
-  model: "gpt-4o-mini",
+  providerId: "",
+  model: "",
   temperature: 0.2,
   maxTokens: 4096,
 };

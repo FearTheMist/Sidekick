@@ -155,7 +155,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         }
         case "selection": {
           const session = this.getActiveSession();
-          if (raw.providerId) {
+          if (typeof raw.providerId === "string") {
             session.providerId = raw.providerId;
           }
           if (typeof raw.model === "string") {
@@ -238,13 +238,32 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     const session = this.getActiveSession();
     const hadMessages = session.history.some((item) => item.kind === "message");
-    if (providerId) {
+    if (typeof providerId === "string") {
       session.providerId = providerId;
     }
-    if (model) {
+    if (typeof model === "string") {
       session.model = model;
     }
     this.ensureValidSessionSelection(session, SidekickConfig.getProviders());
+
+    const providers = SidekickConfig.getProviders();
+    if (!session.providerId || !providers.some((item) => item.id === session.providerId)) {
+      const choice = await vscode.window.showWarningMessage(
+        "No provider configured for chat. Open Sidekick settings now?",
+        "Open Settings"
+      );
+      if (choice === "Open Settings") {
+        await vscode.commands.executeCommand("sidekick.openSettings");
+      }
+      this.postSessionMeta();
+      return;
+    }
+
+    if (!session.model) {
+      vscode.window.showWarningMessage("Select a model before sending chat messages.");
+      this.postSessionMeta();
+      return;
+    }
 
     const userMessage: ChatMessage = {
       id: buildHistoryId("message"),
@@ -272,9 +291,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       model: session.model,
     };
 
-    const provider = SidekickConfig.getProviders().find(
-      (item) => item.id === profile.providerId
-    );
+    const provider = providers.find((item) => item.id === profile.providerId);
     const systemPrompt = await this.buildChatSystemPrompt(provider, profile.model);
 
     const messages: LlmMessage[] = [
@@ -485,18 +502,19 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
     let provider = providers.find((item) => item.id === session.providerId);
     if (!provider) {
-      provider = providers[0];
-      session.providerId = provider.id;
+      session.providerId = "";
+      session.model = "";
+      return;
     }
 
     const models = provider.models || [];
     if (models.length === 0) {
-      session.model = provider.defaultModel || session.model || "";
+      session.model = session.model || provider.defaultModel || "";
       return;
     }
 
     if (!models.some((item) => item.id === session.model)) {
-      session.model = models[0].id;
+      session.model = "";
     }
   }
 
@@ -504,8 +522,8 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     const current = this.getActiveSession();
     const profile = SidekickConfig.getChatProfile();
     const session = createSession(
-      current.providerId || profile.providerId,
-      current.model || profile.model,
+      current.providerId || profile.providerId || "",
+      current.model || profile.model || "",
       DEFAULT_SESSION_TITLE,
       []
     );
@@ -1787,15 +1805,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     }
 
     function setSelection(preferredProviderId, preferredModelId, shouldEmit) {
-      const provider = providers.find((item) => item.id === preferredProviderId) || providers[0];
+      const provider = providers.find((item) => item.id === preferredProviderId);
       activeProviderId = provider ? provider.id : '';
 
       const models = Array.isArray(provider?.models) ? provider.models : [];
       if (models.length === 0) {
-        activeModelId = preferredModelId || provider?.defaultModel || '';
+        activeModelId = provider ? (preferredModelId || provider.defaultModel || '') : '';
       } else {
-        const selected = models.find((item) => item.id === preferredModelId) || models[0];
-        activeModelId = selected.id;
+        const selected = models.find((item) => item.id === preferredModelId);
+        activeModelId = selected ? selected.id : '';
       }
 
       if (shouldEmit) {
@@ -1816,7 +1834,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     function updateModelButton() {
       const provider = providers.find((item) => item.id === activeProviderId);
       const model = (provider?.models || []).find((item) => item.id === activeModelId);
-      const modelName = model
+      const modelName = !provider
+        ? '(no provider selected)'
+        : model
         ? (model.name || model.id)
         : activeModelId || provider?.defaultModel || '(no model)';
       modelPickerBtn.textContent = modelName;

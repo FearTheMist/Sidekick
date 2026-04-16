@@ -124,6 +124,13 @@ async function runProviderTest(gateway: LlmGateway): Promise<void> {
     return;
   }
 
+  if (!selected.defaultModel) {
+    vscode.window.showWarningMessage(
+      "The selected provider has no default model. Configure a model first."
+    );
+    return;
+  }
+
   const model = await vscode.window.showInputBox({
     title: "Model",
     prompt: "Model name to test",
@@ -230,7 +237,14 @@ async function generateCommitMessage(
 
       if (!profile.providerId || !providers.some((item) => item.id === profile.providerId)) {
         vscode.window.showWarningMessage(
-          "Current chat provider is unavailable. Please reselect model in chat panel."
+          "Current chat provider is not configured. Select a provider in the chat panel first."
+        );
+        return;
+      }
+
+      if (!profile.model) {
+        vscode.window.showWarningMessage(
+          "Current chat model is not configured. Select a model in the chat panel first."
         );
         return;
       }

@@ -66,6 +66,11 @@ export class SidekickInlineCompletionProvider
     token: vscode.CancellationToken
   ): Promise<void> {
     const profile = SidekickConfig.getCompletionProfile();
+    if (!profile.providerId || !profile.model) {
+      this.log("skip reason=unconfigured_profile");
+      return;
+    }
+
     const prompt = this.buildPrompt(document, position);
     const startedAt = Date.now();
     let output = "";
@@ -110,6 +115,11 @@ export class SidekickInlineCompletionProvider
   async debugPing(): Promise<void> {
     const profile = SidekickConfig.getCompletionProfile();
     this.output.show(true);
+    if (!profile.providerId || !profile.model) {
+      this.log("debug ping skipped unconfigured_profile");
+      return;
+    }
+
     this.log(
       `debug ping provider=${profile.providerId} model=${profile.model || "(default)"}`
     );
