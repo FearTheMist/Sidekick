@@ -403,10 +403,15 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private async exportHistory(): Promise<void> {
     const session = this.getActiveSession();
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[:]/g, "-")
+      .replace(/\.\d{3}Z$/, "")
+      .replace("T", "_");
     const uri = await vscode.window.showSaveDialog({
       saveLabel: "Export Chat",
       filters: { Markdown: ["md"] },
-      defaultUri: vscode.Uri.file("sidekick-chat.md"),
+      defaultUri: vscode.Uri.file(`sidekick-chat-${timestamp}.md`),
     });
 
     if (!uri) {
