@@ -46,12 +46,12 @@ export async function openSettingsPanel(): Promise<void> {
       await cfg.update(
         "providers",
         providers,
-        vscode.ConfigurationTarget.Workspace
+        vscode.ConfigurationTarget.Global
       );
       await cfg.update(
         "commitMessageLanguage",
         commitMessageLanguage,
-        vscode.ConfigurationTarget.Workspace
+        vscode.ConfigurationTarget.Global
       );
       vscode.window.showInformationMessage("Sidekick provider settings saved.");
       panel.webview.postMessage({
