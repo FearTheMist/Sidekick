@@ -3,7 +3,7 @@
   "displayName": "Sidekick - AI Code Assistant",
   "description": "A VS Code AI coding assistant with multi-session chat, inline completion, and configurable LLM providers.",
   "icon": "media/icon.png",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "publisher": "Lydia",
   "repository":{
     "type": "git",
