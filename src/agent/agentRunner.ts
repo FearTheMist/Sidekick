@@ -113,11 +113,6 @@ export class AgentRunner {
   }
 
   private async runMcpTool(call: ToolCall): Promise<string> {
-    const allowed = await this.authGate.authorize(call.name, call.argumentsText);
-    if (!allowed) {
-      return "Denied";
-    }
-
     try {
       return await this.mcpManager.callTool(call);
     } catch (error) {
