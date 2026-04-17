@@ -6,17 +6,20 @@ import { LlmGateway, ProviderConfig } from "./core/llm";
 import { ChatPanelProvider } from "./features/chat/chatPanel";
 import { SidekickInlineCompletionProvider } from "./features/inline/inlineProvider";
 import { openSettingsPanel } from "./features/settings/settingsPanel";
+import { McpManager } from "./mcp/mcpManager";
+import { openMcpPanel } from "./features/mcp/mcpPanel";
 
 const execAsync = promisify(exec);
 
 export function activate(context: vscode.ExtensionContext): void {
   const gateway = new LlmGateway(SidekickConfig.getProviders());
+  const mcpManager = new McpManager();
   const inlineOutput = vscode.window.createOutputChannel("Sidekick Inline");
   const inlineProvider = new SidekickInlineCompletionProvider(
     gateway,
     inlineOutput
   );
-  const chatPanel = new ChatPanelProvider(context, gateway);
+  const chatPanel = new ChatPanelProvider(context, gateway, mcpManager);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(ChatPanelProvider.viewType, chatPanel),
@@ -32,10 +35,14 @@ export function activate(context: vscode.ExtensionContext): void {
         gateway.setProviders(SidekickConfig.getProviders());
         chatPanel.refreshProviders();
       }
+      if (event.affectsConfiguration("sidekick.mcpServers")) {
+        mcpManager.reloadFromConfig();
+      }
     })
   );
 
   context.subscriptions.push(
+    mcpManager,
     inlineOutput,
     vscode.commands.registerCommand("sidekick.acceptInlinePart", async () => {
       await vscode.commands.executeCommand(
@@ -50,6 +57,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("sidekick.openSettings", async () => {
       await openSettingsPanel();
+    }),
+    vscode.commands.registerCommand("sidekick.openMcpManager", async () => {
+      await openMcpPanel(context.extensionUri, mcpManager);
     }),
     vscode.commands.registerCommand("sidekick.explainCode", async () => {
       await chatPanel.promptAction(

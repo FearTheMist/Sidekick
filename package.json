@@ -40,6 +40,14 @@
         }
       },
       {
+        "command": "sidekick.openMcpManager",
+        "title": "Sidekick: Open MCP Manager",
+        "icon": {
+          "light": "media/mcp-light.svg",
+          "dark": "media/mcp-dark.svg"
+        }
+      },
+      {
         "command": "sidekick.explainCode",
         "title": "Sidekick: Explain Code"
       },
@@ -145,6 +153,11 @@
         {
           "command": "sidekick.openSettings",
           "group": "navigation@90",
+          "when": "view == sidekick.chatView"
+        },
+        {
+          "command": "sidekick.openMcpManager",
+          "group": "navigation@91",
           "when": "view == sidekick.chatView"
         }
       ]

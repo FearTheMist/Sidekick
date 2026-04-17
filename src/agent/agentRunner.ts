@@ -6,10 +6,9 @@ import {
   RawMessageBatch,
   StreamEvent,
   ToolCall,
-  ToolDefinition,
 } from "../core/llm";
 import { createBuiltinToolRuntime, WorkspaceMutation } from "./builtinTools";
-import { McpClient } from "./mcpClient";
+import { McpManager } from "../mcp/mcpManager";
 import { ToolAuthorizationGate } from "./toolAuth";
 
 const MAX_AGENT_STEPS = 4;
@@ -17,7 +16,10 @@ const MAX_AGENT_STEPS = 4;
 export class AgentRunner {
   private readonly authGate = new ToolAuthorizationGate();
 
-  constructor(private readonly gateway: LlmGateway) {}
+  constructor(
+    private readonly gateway: LlmGateway,
+    private readonly mcpManager: McpManager
+  ) {}
 
   async *run(
     messages: LlmMessage[],
@@ -28,146 +30,96 @@ export class AgentRunner {
     const runtime = createBuiltinToolRuntime(this.authGate, {
       mutations: workspaceMutations || [],
     });
-    const mcpClients = await this.startMcpClients();
-    const mcpTools = await this.collectMcpTools(mcpClients);
+    const mcpTools = this.mcpManager.getConnectedToolDefinitions();
     const tools = [...runtime.definitions, ...mcpTools];
 
     let workingMessages = [...messages];
 
-    try {
-      for (let step = 0; step < MAX_AGENT_STEPS; step += 1) {
+    for (let step = 0; step < MAX_AGENT_STEPS; step += 1) {
+      if (signal?.aborted) {
+        return;
+      }
+
+      const profile = {
+        ...SidekickConfig.getAgentProfile(),
+        ...(overrideProfile || {}),
+      };
+
+      const toolCalls: ToolCall[] = [];
+
+      yield {
+        type: "request_messages",
+        batch: this.buildRequestBatch(step, workingMessages),
+      };
+
+      for await (const event of this.gateway.streamChat({
+        profile,
+        messages: workingMessages,
+        tools,
+        signal,
+      })) {
+        if (event.type === "tool_call") {
+          toolCalls.push(event.call);
+          continue;
+        }
+        yield event;
+      }
+
+      if (toolCalls.length === 0) {
+        return;
+      }
+
+      for (const call of toolCalls) {
         if (signal?.aborted) {
           return;
         }
 
-        const profile = {
-          ...SidekickConfig.getAgentProfile(),
-          ...(overrideProfile || {}),
+        yield {
+          type: "tool_activity",
+          id: call.id,
+          phase: "start",
+          name: call.name,
+          detail: this.describeToolCall(call),
         };
 
-        const toolCalls: ToolCall[] = [];
+        const result = call.name.includes(".")
+          ? await this.runMcpTool(call)
+          : await runtime.runTool(call.name, call.argumentsText);
 
         yield {
-          type: "request_messages",
-          batch: this.buildRequestBatch(step, workingMessages),
+          type: "tool_activity",
+          id: call.id,
+          phase: "end",
+          name: call.name,
+          detail: this.summarizeToolResult(result),
         };
 
-        for await (const event of this.gateway.streamChat({
-          profile,
-          messages: workingMessages,
-          tools,
-          signal,
-        })) {
-          if (event.type === "tool_call") {
-            toolCalls.push(event.call);
-            continue;
-          }
-          yield event;
-        }
+        workingMessages.push({
+          role: "assistant",
+          content: `Calling tool ${call.name}`,
+        });
+        workingMessages.push({
+          role: "tool",
+          content: result,
+          name: call.name,
+          toolCallId: call.id,
+        });
 
-        if (toolCalls.length === 0) {
+        if (signal?.aborted) {
           return;
         }
-
-        for (const call of toolCalls) {
-          if (signal?.aborted) {
-            return;
-          }
-
-          yield {
-            type: "tool_activity",
-            id: call.id,
-            phase: "start",
-            name: call.name,
-            detail: this.describeToolCall(call),
-          };
-
-          const result = call.name.includes(".")
-            ? await this.runMcpTool(mcpClients, call)
-            : await runtime.runTool(call.name, call.argumentsText);
-
-          yield {
-            type: "tool_activity",
-            id: call.id,
-            phase: "end",
-            name: call.name,
-            detail: this.summarizeToolResult(result),
-          };
-
-          workingMessages.push({
-            role: "assistant",
-            content: `Calling tool ${call.name}`,
-          });
-          workingMessages.push({
-            role: "tool",
-            content: result,
-            name: call.name,
-            toolCallId: call.id,
-          });
-
-          if (signal?.aborted) {
-            return;
-          }
-        }
-      }
-    } finally {
-      for (const client of mcpClients.values()) {
-        client.dispose();
       }
     }
   }
 
-  private async startMcpClients(): Promise<Map<string, McpClient>> {
-    const servers = SidekickConfig.getMcpServers().filter(
-      (server) => server.enabled !== false
-    );
-
-    const clients = new Map<string, McpClient>();
-    for (const server of servers) {
-      try {
-        const client = new McpClient(server);
-        await client.start();
-        clients.set(client.name, client);
-      } catch {
-        continue;
-      }
-    }
-
-    return clients;
-  }
-
-  private async collectMcpTools(
-    clients: Map<string, McpClient>
-  ): Promise<ToolDefinition[]> {
-    const tools: ToolDefinition[] = [];
-    for (const client of clients.values()) {
-      try {
-        tools.push(...(await client.listTools()));
-      } catch {
-        continue;
-      }
-    }
-    return tools;
-  }
-
-  private async runMcpTool(
-    clients: Map<string, McpClient>,
-    call: ToolCall
-  ): Promise<string> {
-    const [serverName] = call.name.split(".", 1);
-    const client = clients.get(serverName);
-    if (!client) {
-      return `MCP server not found: ${serverName}`;
-    }
-
+  private async runMcpTool(call: ToolCall): Promise<string> {
     const allowed = await this.authGate.authorize(call.name, call.argumentsText);
     if (!allowed) {
       return "Denied";
     }
 
     try {
-      const args = JSON.parse(call.argumentsText || "{}");
-      return await client.callTool(call.name, args);
+      return await this.mcpManager.callTool(call);
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }

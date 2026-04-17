@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { AgentRunner } from "../../agent/agentRunner";
+import { McpManager } from "../../mcp/mcpManager";
 import { SidekickConfig } from "../../core/config";
 import { LlmGateway, LlmMessage, ProviderConfig, RawMessageBatch } from "../../core/llm";
 import {
@@ -86,10 +87,11 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   constructor(
     private readonly context: vscode.ExtensionContext,
-    private readonly gateway: LlmGateway
+    private readonly gateway: LlmGateway,
+    mcpManager: McpManager
   ) {
     this.store = new ChatStore(context);
-    this.agentRunner = new AgentRunner(gateway);
+    this.agentRunner = new AgentRunner(gateway, mcpManager);
     const profile = SidekickConfig.getChatProfile();
     const state = this.store.loadState(profile.providerId, profile.model);
     this.sessions = state.sessions;

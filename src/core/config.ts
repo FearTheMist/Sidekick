@@ -71,11 +71,54 @@ export class SidekickConfig {
   }
 
   static getMcpServers(): McpServerConfig[] {
-    return (
-      vscode.workspace
-        .getConfiguration(SECTION)
-        .get<McpServerConfig[]>("mcpServers", []) || []
+    return this.sanitizeMcpServers(
+      vscode.workspace.getConfiguration(SECTION).get<McpServerConfig[]>("mcpServers", []) || []
     );
+  }
+
+  static sanitizeMcpServers(input: McpServerConfig[]): McpServerConfig[] {
+    const seen = new Set<string>();
+    const output: McpServerConfig[] = [];
+
+    for (const item of input || []) {
+      const name = String(item?.name || "").trim();
+      const url = String(item?.url || "").trim();
+      if (!name || !url || seen.has(name)) {
+        continue;
+      }
+
+      seen.add(name);
+
+      const headers = Object.fromEntries(
+        Object.entries(item?.headers || {}).filter(([key, value]) => {
+          return key.trim().length > 0 && String(value).trim().length > 0;
+        })
+      );
+      const timeoutValue = Number(item?.timeout);
+
+      output.push({
+        name,
+        url,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        timeout:
+          Number.isFinite(timeoutValue) && timeoutValue > 0
+            ? Math.floor(timeoutValue)
+            : undefined,
+        enabled: item?.enabled !== false,
+      });
+    }
+
+    return output;
+  }
+
+  static async saveMcpServers(servers: McpServerConfig[]): Promise<void> {
+    await vscode.workspace
+      .getConfiguration(SECTION)
+      .update(
+        "mcpServers",
+        this.sanitizeMcpServers(servers),
+        vscode.ConfigurationTarget.Global
+      );
   }
 
   static getCommitMessageLanguage(): CommitMessageLanguage {
