@@ -3,9 +3,9 @@ import { ModelProfile, ProviderConfig } from "./llm";
 
 export interface McpServerConfig {
   name: string;
-  command: string;
-  args?: string[];
-  cwd?: string;
+  url: string;
+  headers?: Record<string, string>;
+  timeout?: number;
   enabled?: boolean;
 }
 

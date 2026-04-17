@@ -111,23 +111,23 @@ export class AgentRunner {
         }
       }
     } finally {
-      for (const client of mcpClients) {
+      for (const client of mcpClients.values()) {
         client.dispose();
       }
     }
   }
 
-  private async startMcpClients(): Promise<McpClient[]> {
+  private async startMcpClients(): Promise<Map<string, McpClient>> {
     const servers = SidekickConfig.getMcpServers().filter(
       (server) => server.enabled !== false
     );
 
-    const clients: McpClient[] = [];
+    const clients = new Map<string, McpClient>();
     for (const server of servers) {
       try {
         const client = new McpClient(server);
         await client.start();
-        clients.push(client);
+        clients.set(client.name, client);
       } catch {
         continue;
       }
@@ -136,9 +136,11 @@ export class AgentRunner {
     return clients;
   }
 
-  private async collectMcpTools(clients: McpClient[]): Promise<ToolDefinition[]> {
+  private async collectMcpTools(
+    clients: Map<string, McpClient>
+  ): Promise<ToolDefinition[]> {
     const tools: ToolDefinition[] = [];
-    for (const client of clients) {
+    for (const client of clients.values()) {
       try {
         tools.push(...(await client.listTools()));
       } catch {
@@ -148,22 +150,27 @@ export class AgentRunner {
     return tools;
   }
 
-  private async runMcpTool(clients: McpClient[], call: ToolCall): Promise<string> {
-    for (const client of clients) {
-      try {
-        const allowed = await this.authGate.authorize(call.name, call.argumentsText);
-        if (!allowed) {
-          return "Denied";
-        }
-
-        const args = JSON.parse(call.argumentsText || "{}");
-        return await client.callTool(call.name, args);
-      } catch {
-        continue;
-      }
+  private async runMcpTool(
+    clients: Map<string, McpClient>,
+    call: ToolCall
+  ): Promise<string> {
+    const [serverName] = call.name.split(".", 1);
+    const client = clients.get(serverName);
+    if (!client) {
+      return `MCP server not found: ${serverName}`;
     }
 
-    return `MCP tool not found: ${call.name}`;
+    const allowed = await this.authGate.authorize(call.name, call.argumentsText);
+    if (!allowed) {
+      return "Denied";
+    }
+
+    try {
+      const args = JSON.parse(call.argumentsText || "{}");
+      return await client.callTool(call.name, args);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   }
 
   private describeToolCall(call: ToolCall): string {

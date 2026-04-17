@@ -1,55 +1,57 @@
-import { spawn, ChildProcessWithoutNullStreams } from "node:child_process";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServerConfig } from "../core/config";
 import { ToolDefinition } from "../core/llm";
 
-interface PendingRequest {
-  resolve: (result: any) => void;
-  reject: (error: Error) => void;
-}
-
 export class McpClient {
-  private process?: ChildProcessWithoutNullStreams;
-  private id = 1;
-  private pending = new Map<number, PendingRequest>();
-  private buffer = "";
+  private client?: Client;
+  private transport?: StreamableHTTPClientTransport;
 
   constructor(private readonly config: McpServerConfig) {}
 
+  get name(): string {
+    return this.config.name;
+  }
+
   async start(): Promise<void> {
-    if (this.process) {
+    if (this.client) {
       return;
     }
 
-    this.process = spawn(this.config.command, this.config.args || [], {
-      cwd: this.config.cwd,
-      stdio: "pipe",
-      shell: true,
+    const transport = new StreamableHTTPClientTransport(new URL(this.config.url), {
+      requestInit: this.config.headers
+        ? {
+            headers: this.config.headers,
+          }
+        : undefined,
+    });
+    const client = new Client({
+      name: "sidekick",
+      version: "0.1.0",
     });
 
-    this.process.stdout.on("data", (chunk: Buffer) => {
-      this.onStdout(chunk.toString("utf8"));
-    });
-
-    this.process.on("exit", () => {
-      for (const [, item] of this.pending) {
-        item.reject(new Error("MCP process exited"));
-      }
-      this.pending.clear();
-      this.process = undefined;
-    });
-
-    await this.request("initialize", {
-      protocolVersion: "2024-11-05",
-      capabilities: {},
-      clientInfo: {
-        name: "sidekick",
-        version: "0.1.0",
-      },
-    });
+    try {
+      await client.connect(transport, {
+        timeout: this.config.timeout,
+      });
+      this.transport = transport;
+      this.client = client;
+    } catch (error) {
+      await transport.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   async listTools(): Promise<ToolDefinition[]> {
-    const response = await this.request("tools/list", {});
+    if (!this.client) {
+      throw new Error("MCP client not started");
+    }
+
+    const response = await this.client.listTools({
+      cursor: undefined,
+    }, {
+      timeout: this.config.timeout,
+    });
     const tools = Array.isArray(response?.tools) ? response.tools : [];
     return tools.map((tool: any) => ({
       name: `${this.config.name}.${String(tool.name)}`,
@@ -59,10 +61,20 @@ export class McpClient {
   }
 
   async callTool(toolName: string, args: unknown): Promise<string> {
+    if (!this.client) {
+      throw new Error("MCP client not started");
+    }
+
     const resolvedName = toolName.replace(`${this.config.name}.`, "");
-    const response = await this.request("tools/call", {
+    const argumentsObject =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
+    const response = await this.client.callTool({
       name: resolvedName,
-      arguments: args,
+      arguments: argumentsObject,
+    }, undefined, {
+      timeout: this.config.timeout,
     });
 
     if (!response?.content) {
@@ -73,70 +85,11 @@ export class McpClient {
   }
 
   dispose(): void {
-    this.process?.kill();
-    this.pending.clear();
-    this.process = undefined;
-  }
-
-  private onStdout(text: string): void {
-    this.buffer += text;
-
-    while (true) {
-      const breakIndex = this.buffer.indexOf("\n");
-      if (breakIndex < 0) {
-        return;
-      }
-
-      const line = this.buffer.slice(0, breakIndex).trim();
-      this.buffer = this.buffer.slice(breakIndex + 1);
-
-      if (!line) {
-        continue;
-      }
-
-      let parsed: any;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      const id = Number(parsed.id);
-      const pending = this.pending.get(id);
-      if (!pending) {
-        continue;
-      }
-
-      this.pending.delete(id);
-      if (parsed.error) {
-        pending.reject(new Error(String(parsed.error.message || "MCP error")));
-      } else {
-        pending.resolve(parsed.result);
-      }
-    }
-  }
-
-  private async request(method: string, params: unknown): Promise<any> {
-    if (!this.process) {
-      throw new Error("MCP process not started");
-    }
-
-    const id = this.id++;
-    const payload = JSON.stringify({
-      jsonrpc: "2.0",
-      id,
-      method,
-      params,
-    });
-
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.process?.stdin.write(`${payload}\n`, "utf8", (error) => {
-        if (error) {
-          this.pending.delete(id);
-          reject(error);
-        }
-      });
-    });
+    const client = this.client;
+    const transport = this.transport;
+    this.client = undefined;
+    this.transport = undefined;
+    void client?.close().catch(() => undefined);
+    void transport?.close().catch(() => undefined);
   }
 }
