@@ -124,6 +124,10 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.postHydrate();
   }
 
+  clearPermissionSession(): void {
+    this.agentRunner.clearPermissionSession();
+  }
+
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
     this.view = webviewView;
     webviewView.webview.options = {

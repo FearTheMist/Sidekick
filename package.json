@@ -48,6 +48,10 @@
         }
       },
       {
+        "command": "sidekick.openPermissionSettings",
+        "title": "Sidekick: Open Permission Settings"
+      },
+      {
         "command": "sidekick.explainCode",
         "title": "Sidekick: Explain Code"
       },
@@ -159,6 +163,11 @@
           "command": "sidekick.openMcpManager",
           "group": "navigation@91",
           "when": "view == sidekick.chatView"
+        },
+        {
+          "command": "sidekick.openPermissionSettings",
+          "group": "navigation@92",
+          "when": "view == sidekick.chatView"
         }
       ]
     },
@@ -237,6 +246,74 @@
             "中文",
             "English"
           ]
+        },
+        "sidekick.permissions": {
+          "type": "object",
+          "default": {
+            "terminal_read": "allow",
+            "terminal_project_exec": "ask",
+            "terminal_project_mutation": "ask",
+            "terminal_external_access": "ask",
+            "terminal_network": "ask",
+            "terminal_destructive": "ask"
+          },
+          "markdownDescription": "Default permission policy for Sidekick terminal command categories.",
+          "properties": {
+            "terminal_read": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "ask",
+                "deny"
+              ],
+              "description": "Read project state commands, such as git status or ls."
+            },
+            "terminal_project_exec": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "ask",
+                "deny"
+              ],
+              "description": "Project validation commands, such as npm test or pnpm build."
+            },
+            "terminal_project_mutation": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "ask",
+                "deny"
+              ],
+              "description": "Project-changing commands, such as npm install or git commit."
+            },
+            "terminal_external_access": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "ask",
+                "deny"
+              ],
+              "description": "Commands that access files outside the workspace."
+            },
+            "terminal_network": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "ask",
+                "deny"
+              ],
+              "description": "Commands that access the network, such as curl or wget."
+            },
+            "terminal_destructive": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "ask",
+                "deny"
+              ],
+              "description": "High-risk commands that may delete or overwrite data, or start nested shells."
+            }
+          }
         }
       }
     }

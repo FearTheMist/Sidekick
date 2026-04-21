@@ -10,6 +10,16 @@ export interface McpServerConfig {
 }
 
 export type CommitMessageLanguage = "auto" | "zh-CN" | "en";
+export type PermissionPolicyAction = "allow" | "ask" | "deny";
+
+export interface PermissionPolicyConfig {
+  terminal_read: PermissionPolicyAction;
+  terminal_project_exec: PermissionPolicyAction;
+  terminal_project_mutation: PermissionPolicyAction;
+  terminal_external_access: PermissionPolicyAction;
+  terminal_network: PermissionPolicyAction;
+  terminal_destructive: PermissionPolicyAction;
+}
 
 const SECTION = "sidekick";
 
@@ -37,6 +47,15 @@ const DEFAULT_AGENT_PROFILE: ModelProfile = {
 };
 
 const DEFAULT_COMMIT_MESSAGE_LANGUAGE: CommitMessageLanguage = "auto";
+
+const DEFAULT_PERMISSION_POLICY: PermissionPolicyConfig = {
+  terminal_read: "allow",
+  terminal_project_exec: "ask",
+  terminal_project_mutation: "ask",
+  terminal_external_access: "ask",
+  terminal_network: "ask",
+  terminal_destructive: "ask",
+};
 
 export class SidekickConfig {
   static getProviderSettings(): ProviderConfig[] {
@@ -134,5 +153,65 @@ export class SidekickConfig {
     }
 
     return "auto";
+  }
+
+  static getPermissionPolicy(): PermissionPolicyConfig {
+    const value = vscode.workspace
+      .getConfiguration(SECTION)
+      .get<Partial<PermissionPolicyConfig>>("permissions", DEFAULT_PERMISSION_POLICY);
+
+    return {
+      terminal_read: this.normalizePermissionAction(value?.terminal_read),
+      terminal_project_exec: this.normalizePermissionAction(
+        value?.terminal_project_exec
+      ),
+      terminal_project_mutation: this.normalizePermissionAction(
+        value?.terminal_project_mutation
+      ),
+      terminal_external_access: this.normalizePermissionAction(
+        value?.terminal_external_access
+      ),
+      terminal_network: this.normalizePermissionAction(value?.terminal_network),
+      terminal_destructive: this.normalizePermissionAction(
+        value?.terminal_destructive
+      ),
+    };
+  }
+
+  static async savePermissionPolicy(
+    policy: Partial<PermissionPolicyConfig>
+  ): Promise<void> {
+    await vscode.workspace
+      .getConfiguration(SECTION)
+      .update(
+        "permissions",
+        {
+          terminal_read: this.normalizePermissionAction(policy.terminal_read),
+          terminal_project_exec: this.normalizePermissionAction(
+            policy.terminal_project_exec
+          ),
+          terminal_project_mutation: this.normalizePermissionAction(
+            policy.terminal_project_mutation
+          ),
+          terminal_external_access: this.normalizePermissionAction(
+            policy.terminal_external_access
+          ),
+          terminal_network: this.normalizePermissionAction(policy.terminal_network),
+          terminal_destructive: this.normalizePermissionAction(
+            policy.terminal_destructive
+          ),
+        },
+        vscode.ConfigurationTarget.Global
+      );
+  }
+
+  static getDefaultPermissionPolicy(): PermissionPolicyConfig {
+    return { ...DEFAULT_PERMISSION_POLICY };
+  }
+
+  private static normalizePermissionAction(
+    value: unknown
+  ): PermissionPolicyAction {
+    return value === "allow" || value === "deny" ? value : "ask";
   }
 }

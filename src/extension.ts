@@ -8,6 +8,7 @@ import { SidekickInlineCompletionProvider } from "./features/inline/inlineProvid
 import { openSettingsPanel } from "./features/settings/settingsPanel";
 import { McpManager } from "./mcp/mcpManager";
 import { openMcpPanel } from "./features/mcp/mcpPanel";
+import { openPermissionPanel } from "./features/permissions/permissionPanel";
 
 const execAsync = promisify(exec);
 
@@ -60,6 +61,11 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("sidekick.openMcpManager", async () => {
       await openMcpPanel(context.extensionUri, mcpManager);
+    }),
+    vscode.commands.registerCommand("sidekick.openPermissionSettings", async () => {
+      await openPermissionPanel(() => {
+        chatPanel.clearPermissionSession();
+      });
     }),
     vscode.commands.registerCommand("sidekick.explainCode", async () => {
       await chatPanel.promptAction(

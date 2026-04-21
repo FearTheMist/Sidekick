@@ -112,6 +112,10 @@ export class AgentRunner {
     }
   }
 
+  clearPermissionSession(): void {
+    this.authGate.clearSession();
+  }
+
   private async runMcpTool(call: ToolCall): Promise<string> {
     try {
       return await this.mcpManager.callTool(call);

@@ -4,6 +4,7 @@ import * as nodePath from "node:path";
 import { promisify } from "node:util";
 import { ToolDefinition } from "../core/llm";
 import { ToolAuthorizationGate } from "./toolAuth";
+import { classifyTerminalCommand } from "./terminalPermissions";
 
 const execAsync = promisify(exec);
 
@@ -1193,12 +1194,13 @@ async function runCommandTool(
   auth: ToolAuthorizationGate,
   command: string
 ): Promise<string> {
-  const ok = await auth.authorize("run_terminal_command", command);
+  const root = getWorkspaceRoot();
+  const requests = classifyTerminalCommand(command, root.fsPath);
+  const ok = await auth.authorizeRequests(requests);
   if (!ok) {
     return "Denied";
   }
 
-  const root = getWorkspaceRoot();
   const { stdout, stderr } = await execAsync(command, { cwd: root.fsPath });
   return `stdout:\n${stdout}\n\nstderr:\n${stderr}`;
 }
