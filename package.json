@@ -28,6 +28,14 @@
   "contributes": {
     "commands": [
       {
+        "command": "sidekick.openControlCenter",
+        "title": "Sidekick: Open Control Center",
+        "icon": {
+          "light": "media/settings-light.svg",
+          "dark": "media/settings-dark.svg"
+        }
+      },
+      {
         "command": "sidekick.openChat",
         "title": "Sidekick: Open Chat"
       },
@@ -155,18 +163,8 @@
       ],
       "view/title": [
         {
-          "command": "sidekick.openSettings",
+          "command": "sidekick.openControlCenter",
           "group": "navigation@90",
-          "when": "view == sidekick.chatView"
-        },
-        {
-          "command": "sidekick.openMcpManager",
-          "group": "navigation@91",
-          "when": "view == sidekick.chatView"
-        },
-        {
-          "command": "sidekick.openPermissionSettings",
-          "group": "navigation@92",
           "when": "view == sidekick.chatView"
         }
       ]

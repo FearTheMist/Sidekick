@@ -9,6 +9,7 @@ import { openSettingsPanel } from "./features/settings/settingsPanel";
 import { McpManager } from "./mcp/mcpManager";
 import { openMcpPanel } from "./features/mcp/mcpPanel";
 import { openPermissionPanel } from "./features/permissions/permissionPanel";
+import { openControlCenterPanel } from "./features/controlCenter/controlCenterPanel";
 
 const execAsync = promisify(exec);
 
@@ -56,14 +57,23 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("sidekick.openChat", async () => {
       await chatPanel.focus();
     }),
+    vscode.commands.registerCommand("sidekick.openControlCenter", async () => {
+      await openControlCenterPanel("providers", mcpManager, () => {
+        chatPanel.clearPermissionSession();
+      });
+    }),
     vscode.commands.registerCommand("sidekick.openSettings", async () => {
-      await openSettingsPanel();
+      await openSettingsPanel(mcpManager, () => {
+        chatPanel.clearPermissionSession();
+      });
     }),
     vscode.commands.registerCommand("sidekick.openMcpManager", async () => {
-      await openMcpPanel(context.extensionUri, mcpManager);
+      await openMcpPanel(context.extensionUri, mcpManager, () => {
+        chatPanel.clearPermissionSession();
+      });
     }),
     vscode.commands.registerCommand("sidekick.openPermissionSettings", async () => {
-      await openPermissionPanel(() => {
+      await openPermissionPanel(mcpManager, () => {
         chatPanel.clearPermissionSession();
       });
     }),
