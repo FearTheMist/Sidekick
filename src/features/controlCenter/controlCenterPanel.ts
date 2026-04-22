@@ -502,8 +502,61 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     .list-item .title { font-weight: 600; }
     .list-item .sub { color: var(--muted); margin-top: 4px; word-break: break-all; }
     .list-item .badge { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .context-menu {
+      position: fixed;
+      min-width: 136px;
+      padding: 6px;
+      border: 1px solid var(--stroke);
+      border-radius: 12px;
+      background: rgba(16, 20, 26, 0.98);
+      box-shadow: 0 16px 40px rgba(0,0,0,0.28);
+      z-index: 20;
+    }
+    .context-menu.hidden { display: none; }
+    .context-menu button {
+      width: 100%;
+      min-height: 34px;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      text-align: left;
+      box-shadow: none;
+    }
+    .context-menu button:hover {
+      background: rgba(255,255,255,0.06);
+    }
+    .context-menu button.danger {
+      color: #ff9aa5;
+    }
+    .context-menu button.danger:hover {
+      background: rgba(255,107,120,0.14);
+    }
     .field { display: grid; gap: 6px; margin-bottom: 14px; }
     .field label { color: var(--muted); font-size: 12px; }
+    .field-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      padding: 0;
+    }
+    .icon-btn svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     .toggle-field {
       display: flex;
       align-items: center;
@@ -608,15 +661,13 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
           <div class="card">
             <div class="toolbar">
               <h3 id="providerEditorTitle" style="margin:0">Provider</h3>
-              <button id="saveProviders" class="primary">Save Providers</button>
-              <button id="deleteProvider" class="danger">Delete</button>
             </div>
             <div id="providerEmpty" class="muted">Select a provider to edit it, or add a new one.</div>
             <div id="providerEditor" style="display:none;">
               <div class="triple">
                 <div class="field"><label>Name</label><input id="providerName" /></div>
                 <div class="field"><label>Base URL</label><input id="providerBaseUrl" /></div>
-                <div class="field"><label>API Key</label><input id="providerApiKey" type="password" /></div>
+                <div class="field"><div class="field-head"><label>API Key</label><button id="toggleProviderApiKey" class="icon-btn" type="button" aria-label="Show API key" title="Show API key"></button></div><input id="providerApiKey" type="password" /></div>
               </div>
               <div class="toggle-field"><div class="toggle-copy"><strong>Enabled</strong><span>Include this provider in Sidekick model selection.</span></div><button id="providerEnabled" class="toggle-btn" type="button" aria-label="Toggle provider enabled"></button></div>
               <div class="field">
@@ -693,6 +744,10 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       </section>
     </main>
   </div>
+  <div id="providerContextMenu" class="context-menu hidden">
+    <button id="duplicateProviderAction" type="button">Duplicate Provider</button>
+    <button id="deleteProviderAction" class="danger" type="button">Delete Provider</button>
+  </div>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -712,6 +767,8 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
 
     const statusEl = document.getElementById('status');
     const heroNoteEl = document.getElementById('heroNote');
+    const toggleProviderApiKeyBtn = document.getElementById('toggleProviderApiKey');
+    const providerContextMenu = document.getElementById('providerContextMenu');
     const sectionNotes = {
       providers: 'Configure your chat and agent providers, manage model lists, and set commit message language.',
       mcp: 'Manage MCP servers, inspect connection status, and refresh exposed tools.',
@@ -720,6 +777,43 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     };
 
     function setStatus(message) { statusEl.textContent = message; }
+    function saveProvidersNow() {
+      setStatus('Saving...');
+      vscode.postMessage({ type: 'save-providers', providers: state.providers, commitMessageLanguage: state.commitMessageLanguage });
+    }
+    function commitProviderDraftIfReady() {
+      if (state.selectedProvider !== -2 || !state.providerDraft) {
+        return false;
+      }
+      if (!String(state.providerDraft.baseUrl || '').trim()) {
+        return false;
+      }
+      state.providers.push(state.providerDraft);
+      state.selectedProvider = state.providers.length - 1;
+      state.providerDraft = null;
+      renderProviders();
+      saveProvidersNow();
+      return true;
+    }
+    function hideProviderContextMenu() {
+      providerContextMenu.classList.add('hidden');
+    }
+    function openProviderContextMenu(x, y, index) {
+      state.selectedProvider = index;
+      renderProviders();
+      providerContextMenu.dataset.index = String(index);
+      providerContextMenu.style.left = x + 'px';
+      providerContextMenu.style.top = y + 'px';
+      providerContextMenu.classList.remove('hidden');
+    }
+    function renderApiKeyToggle() {
+      const isHidden = document.getElementById('providerApiKey').type === 'password';
+      toggleProviderApiKeyBtn.setAttribute('aria-label', isHidden ? 'Show API key' : 'Hide API key');
+      toggleProviderApiKeyBtn.setAttribute('title', isHidden ? 'Show API key' : 'Hide API key');
+      toggleProviderApiKeyBtn.innerHTML = isHidden
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18"></path><path d="M10.6 10.7a3 3 0 0 0 4.2 4.2"></path><path d="M9.4 5.3A10.7 10.7 0 0 1 12 5c6.5 0 10 7 10 7a17.2 17.2 0 0 1-5 5.3"></path><path d="M6.7 6.7C3.8 8.4 2 12 2 12a17.8 17.8 0 0 0 7.3 6"></path></svg>';
+    }
     function escapeHtml(value) {
       return String(value)
         .replace(/&/g, '&amp;')
@@ -768,12 +862,18 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       list.querySelectorAll('[data-provider-index]').forEach((el) => {
         el.addEventListener('click', () => {
           state.selectedProvider = Number(el.dataset.providerIndex);
+          hideProviderContextMenu();
           renderProviders();
+        });
+        el.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          openProviderContextMenu(event.clientX, event.clientY, Number(el.dataset.providerIndex));
         });
       });
       list.querySelectorAll('[data-provider-draft]').forEach((el) => {
         el.addEventListener('click', () => {
           state.selectedProvider = -2;
+          hideProviderContextMenu();
           renderProviders();
         });
       });
@@ -785,12 +885,10 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       if (!provider && !draft) {
         empty.style.display = 'block';
         editor.style.display = 'none';
-        document.getElementById('deleteProvider').disabled = true;
         return;
       }
       empty.style.display = 'none';
       editor.style.display = 'block';
-      document.getElementById('deleteProvider').disabled = false;
       const current = draft || provider;
       document.getElementById('providerEditorTitle').textContent = draft ? 'New Provider' : (provider.label || provider.id || 'Provider');
       document.getElementById('providerName').value = current.label || '';
@@ -798,6 +896,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       document.getElementById('providerApiKey').value = current.apiKey || '';
       document.getElementById('providerEnabled').dataset.value = current.enabled === false ? 'false' : 'true';
       document.getElementById('providerEnabled').classList.toggle('on', current.enabled !== false);
+      renderApiKeyToggle();
       renderProviderModels();
     }
 
@@ -814,16 +913,36 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         '</tr>').join('');
       tbody.querySelectorAll('[data-model-id]').forEach((el) => el.addEventListener('input', (event) => {
         provider.models[event.target.dataset.modelId].id = event.target.value;
+        if (state.selectedProvider === -2) {
+          setStatus('Unsaved draft');
+          return;
+        }
+        saveProvidersNow();
       }));
       tbody.querySelectorAll('[data-model-name]').forEach((el) => el.addEventListener('input', (event) => {
         provider.models[event.target.dataset.modelName].name = event.target.value;
+        if (state.selectedProvider === -2) {
+          setStatus('Unsaved draft');
+          return;
+        }
+        saveProvidersNow();
       }));
       tbody.querySelectorAll('[data-model-endpoint]').forEach((el) => el.addEventListener('change', (event) => {
         provider.models[event.target.dataset.modelEndpoint].endpointType = event.target.value;
+        if (state.selectedProvider === -2) {
+          setStatus('Unsaved draft');
+          return;
+        }
+        saveProvidersNow();
       }));
       tbody.querySelectorAll('[data-model-remove]').forEach((el) => el.addEventListener('click', () => {
         provider.models.splice(Number(el.dataset.modelRemove), 1);
         renderProviderModels();
+        if (state.selectedProvider === -2) {
+          setStatus('Unsaved draft');
+          return;
+        }
+        saveProvidersNow();
       }));
     }
 
@@ -958,34 +1077,17 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       renderProviders();
       setStatus('Draft created');
     });
-    document.getElementById('saveProviders').addEventListener('click', () => {
-      syncProviderDraft();
-      setStatus('Saving...');
-      if (state.selectedProvider === -2 && state.providerDraft) {
-        state.providers.push(state.providerDraft);
-        state.selectedProvider = state.providers.length - 1;
-        state.providerDraft = null;
-      }
-      vscode.postMessage({ type: 'save-providers', providers: state.providers, commitMessageLanguage: state.commitMessageLanguage });
-    });
-    document.getElementById('deleteProvider').addEventListener('click', () => {
-      if (state.selectedProvider === -2) {
-        state.providerDraft = null;
-        state.selectedProvider = state.providers.length > 0 ? 0 : -1;
-        renderProviders();
-        setStatus('Draft removed');
-        return;
-      }
-      if (state.selectedProvider < 0) return;
-      state.providers.splice(state.selectedProvider, 1);
-      if (state.selectedProvider >= state.providers.length) state.selectedProvider = state.providers.length - 1;
-      renderProviders();
-      setStatus('Unsaved changes');
-    });
     ['providerName','providerBaseUrl','providerApiKey'].forEach((id) => {
       document.getElementById(id).addEventListener('input', () => {
         syncProviderDraft();
-        setStatus('Unsaved changes');
+        if (state.selectedProvider === -2) {
+          if (commitProviderDraftIfReady()) {
+            return;
+          }
+          setStatus('Unsaved draft');
+          return;
+        }
+        saveProvidersNow();
       });
     });
     document.getElementById('providerEnabled').addEventListener('click', () => {
@@ -994,15 +1096,72 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       el.dataset.value = next;
       el.classList.toggle('on', next !== 'false');
       syncProviderDraft();
-      setStatus('Unsaved changes');
+      if (state.selectedProvider === -2) {
+        if (commitProviderDraftIfReady()) {
+          return;
+        }
+        setStatus('Unsaved draft');
+        return;
+      }
+      saveProvidersNow();
     });
+    toggleProviderApiKeyBtn.addEventListener('click', () => {
+      const input = document.getElementById('providerApiKey');
+      input.type = input.type === 'password' ? 'text' : 'password';
+      renderApiKeyToggle();
+    });
+    document.getElementById('duplicateProviderAction').addEventListener('click', () => {
+      const index = Number(providerContextMenu.dataset.index);
+      const provider = state.providers[index];
+      hideProviderContextMenu();
+      if (!provider) return;
+      const models = Array.isArray(provider.models)
+        ? provider.models.map((model) => ({ ...model }))
+        : [];
+      state.providerDraft = {
+        ...provider,
+        id: '',
+        label: (provider.label || 'Provider') + ' Copy',
+        models,
+      };
+      state.providers.push(state.providerDraft);
+      state.selectedProvider = state.providers.length - 1;
+      state.providerDraft = null;
+      renderProviders();
+      saveProvidersNow();
+    });
+    document.getElementById('deleteProviderAction').addEventListener('click', () => {
+      const index = Number(providerContextMenu.dataset.index);
+      hideProviderContextMenu();
+      if (!Number.isInteger(index) || index < 0) return;
+      state.providers.splice(index, 1);
+      if (state.selectedProvider >= state.providers.length) {
+        state.selectedProvider = state.providers.length - 1;
+      }
+      renderProviders();
+      saveProvidersNow();
+    });
+    document.addEventListener('click', (event) => {
+      if (!providerContextMenu.contains(event.target)) {
+        hideProviderContextMenu();
+      }
+    });
+    window.addEventListener('blur', hideProviderContextMenu);
+    window.addEventListener('scroll', hideProviderContextMenu, true);
     document.getElementById('addProviderModel').addEventListener('click', () => {
       const provider = state.selectedProvider === -2 ? state.providerDraft : state.providers[state.selectedProvider];
       if (!provider) return;
       provider.models = Array.isArray(provider.models) ? provider.models : [];
       provider.models.push({ id: '', name: '', endpointType: 'OPENAI' });
       renderProviderModels();
-      setStatus('Unsaved changes');
+      if (state.selectedProvider === -2) {
+        if (commitProviderDraftIfReady()) {
+          return;
+        }
+        setStatus('Unsaved draft');
+        return;
+      }
+      saveProvidersNow();
     });
 
     document.getElementById('addMcp').addEventListener('click', () => {
