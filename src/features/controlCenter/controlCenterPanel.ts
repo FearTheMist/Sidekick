@@ -252,15 +252,16 @@ function normalizeEndpointType(type: unknown): ModelEndpointType {
   if (normalized === "OPENAI" || normalized === "OPENAI_CHAT") {
     return "OPENAI";
   }
-  if (normalized === "OPENAI_RESPONSE" || normalized === "OPENAI_RESPONSES") {
-    return "OPENAI_RESPONSE";
-  }
   if (
-    normalized === "OPENAI_COMPATIBLE" ||
+    normalized === "OPENAI_RESPONSE" ||
+    normalized === "OPENAI_RESPONSES" ||
     normalized === "OPENAI_COMPATIBLE_RESPONSE" ||
     normalized === "OPENAI_COMPATIBLE_RESPONSES"
   ) {
-    return normalized as ModelEndpointType;
+    return "OPENAI_RESPONSE";
+  }
+  if (normalized === "OPENAI_COMPATIBLE") {
+    return "OPENAI";
   }
   if (normalized === "ANTHROPIC" || normalized === "ANTHROPIC_MESSAGES") {
     return "ANTHROPIC_MESSAGES";
@@ -277,13 +278,6 @@ function endpointTypeToApiType(
   }
   if (normalized === "OPENAI_RESPONSE") {
     return "openai-responses";
-  }
-  if (
-    normalized === "OPENAI_COMPATIBLE" ||
-    normalized === "OPENAI_COMPATIBLE_RESPONSE" ||
-    normalized === "OPENAI_COMPATIBLE_RESPONSES"
-  ) {
-    return "openai-compatible";
   }
   return "anthropic-messages";
 }
@@ -702,7 +696,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    const endpointOptions = ['OPENAI','OPENAI_RESPONSE','OPENAI_COMPATIBLE','OPENAI_COMPATIBLE_RESPONSE','ANTHROPIC_MESSAGES'];
+    const endpointOptions = ['OPENAI','OPENAI_RESPONSE','ANTHROPIC_MESSAGES'];
     const state = {
       section: 'providers',
       providers: [],
