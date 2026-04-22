@@ -8,5 +8,6 @@ vsc-extension-quickstart.md
 **/.eslintrc.json
 **/*.map
 **/*.ts
+out/**
+!out/extension.js
 node_modules/**
-!node_modules/xml2js/**

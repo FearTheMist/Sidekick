@@ -3,7 +3,7 @@
   "displayName": "Sidekick - AI Code Assistant",
   "description": "A VS Code AI coding assistant with multi-session chat, inline completion, and configurable LLM providers.",
   "icon": "media/icon.png",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "Lydia",
   "repository":{
     "type": "git",
@@ -320,11 +320,13 @@
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "compile": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=out/extension.js --sourcemap",
+    "prepackage": "npm run compile",
+    "watch": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node20 --external:vscode --outfile=out/extension.js --sourcemap --watch",
     "test:gateway": "node scripts/gateway-acceptance.js"
   },
   "devDependencies": {
+    "esbuild": "^0.25.3",
     "@types/node": "^20.12.12",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.4.5"
