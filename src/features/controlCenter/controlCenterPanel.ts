@@ -700,8 +700,6 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
             <div class="card">
               <div class="toolbar">
                 <h3 id="mcpEditorTitle" style="margin:0">Server</h3>
-                <button id="saveMcp" class="primary">Save</button>
-                <button id="removeMcp" class="danger">Delete</button>
               </div>
               <div id="mcpEmpty" class="muted">Select a server to inspect or edit it, or add a new server.</div>
               <div id="mcpEditor" style="display:none;">
@@ -748,6 +746,10 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     <button id="duplicateProviderAction" type="button">Duplicate Provider</button>
     <button id="deleteProviderAction" class="danger" type="button">Delete Provider</button>
   </div>
+  <div id="mcpContextMenu" class="context-menu hidden">
+    <button id="duplicateMcpAction" type="button">Duplicate Server</button>
+    <button id="deleteMcpAction" class="danger" type="button">Delete Server</button>
+  </div>
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -761,6 +763,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       mcpServers: [],
       selectedMcp: -1,
       mcpDraft: null,
+      mcpEditingName: '',
       permissions: {},
       permissionEntries: []
     };
@@ -769,6 +772,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     const heroNoteEl = document.getElementById('heroNote');
     const toggleProviderApiKeyBtn = document.getElementById('toggleProviderApiKey');
     const providerContextMenu = document.getElementById('providerContextMenu');
+    const mcpContextMenu = document.getElementById('mcpContextMenu');
     const sectionNotes = {
       providers: 'Configure your chat and agent providers, manage model lists, and set commit message language.',
       mcp: 'Manage MCP servers, inspect connection status, and refresh exposed tools.',
@@ -780,6 +784,24 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     function saveProvidersNow() {
       setStatus('Saving...');
       vscode.postMessage({ type: 'save-providers', providers: state.providers, commitMessageLanguage: state.commitMessageLanguage });
+    }
+    function saveMcpNow() {
+      if (state.selectedMcp === -2) {
+        if (!commitMcpDraftIfReady()) {
+          setStatus('Unsaved draft');
+        }
+        return;
+      }
+      const server = state.mcpServers[state.selectedMcp];
+      if (!server || server.status === 'connected' || server.status === 'connecting') return;
+      const payload = currentMcpPayload();
+      if (!String(payload.name || '').trim() || !String(payload.url || '').trim()) {
+        setStatus('Unsaved draft');
+        return;
+      }
+      setStatus('Saving...');
+      vscode.postMessage({ type: 'update-mcp', name: state.mcpEditingName || server.config.name, server: payload });
+      state.mcpEditingName = payload.name;
     }
     function commitProviderDraftIfReady() {
       if (state.selectedProvider !== -2 || !state.providerDraft) {
@@ -795,8 +817,29 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       saveProvidersNow();
       return true;
     }
+    function commitMcpDraftIfReady() {
+      if (state.selectedMcp !== -2 || !state.mcpDraft) {
+        return false;
+      }
+      if (!String(state.mcpDraft.name || '').trim() || !String(state.mcpDraft.url || '').trim()) {
+        return false;
+      }
+      setStatus('Saving...');
+      vscode.postMessage({ type: 'add-mcp', server: state.mcpDraft });
+      state.mcpEditingName = state.mcpDraft.name;
+      state.mcpDraft = null;
+      state.selectedMcp = state.mcpServers.length;
+      return true;
+    }
     function hideProviderContextMenu() {
       providerContextMenu.classList.add('hidden');
+    }
+    function hideMcpContextMenu() {
+      mcpContextMenu.classList.add('hidden');
+    }
+    function hideContextMenus() {
+      hideProviderContextMenu();
+      hideMcpContextMenu();
     }
     function openProviderContextMenu(x, y, index) {
       state.selectedProvider = index;
@@ -805,6 +848,23 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       providerContextMenu.style.left = x + 'px';
       providerContextMenu.style.top = y + 'px';
       providerContextMenu.classList.remove('hidden');
+    }
+    function openMcpContextMenu(x, y, index) {
+      state.selectedMcp = index;
+      state.mcpEditingName = state.mcpServers[index]?.config?.name || '';
+      renderMcp();
+      mcpContextMenu.dataset.index = String(index);
+      mcpContextMenu.style.left = x + 'px';
+      mcpContextMenu.style.top = y + 'px';
+      mcpContextMenu.classList.remove('hidden');
+    }
+    function uniqueMcpName(base) {
+      const clean = String(base || 'new-server').trim() || 'new-server';
+      const names = new Set(state.mcpServers.map((server) => server.config.name));
+      if (!names.has(clean)) return clean;
+      let index = 2;
+      while (names.has(clean + '-' + index)) index += 1;
+      return clean + '-' + index;
     }
     function renderApiKeyToggle() {
       const isHidden = document.getElementById('providerApiKey').type === 'password';
@@ -911,24 +971,40 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
         '<td><select data-model-endpoint="' + index + '">' + endpointOptions.map((option) => '<option value="' + option + '"' + (option === model.endpointType ? ' selected' : '') + '>' + option + '</option>').join('') + '</select></td>' +
         '<td><button data-model-remove="' + index + '">Remove</button></td>' +
         '</tr>').join('');
-      tbody.querySelectorAll('[data-model-id]').forEach((el) => el.addEventListener('input', (event) => {
-        provider.models[event.target.dataset.modelId].id = event.target.value;
-        if (state.selectedProvider === -2) {
+      tbody.querySelectorAll('[data-model-id]').forEach((el) => {
+        el.addEventListener('input', (event) => {
+          provider.models[event.target.dataset.modelId].id = event.target.value;
           setStatus('Unsaved draft');
-          return;
-        }
-        saveProvidersNow();
-      }));
-      tbody.querySelectorAll('[data-model-name]').forEach((el) => el.addEventListener('input', (event) => {
-        provider.models[event.target.dataset.modelName].name = event.target.value;
-        if (state.selectedProvider === -2) {
+        });
+        el.addEventListener('change', (event) => {
+          provider.models[event.target.dataset.modelId].id = event.target.value;
+          if (!String(event.target.value || '').trim() || state.selectedProvider === -2) {
+            setStatus('Unsaved draft');
+            return;
+          }
+          saveProvidersNow();
+        });
+      });
+      tbody.querySelectorAll('[data-model-name]').forEach((el) => {
+        el.addEventListener('input', (event) => {
+          provider.models[event.target.dataset.modelName].name = event.target.value;
           setStatus('Unsaved draft');
-          return;
-        }
-        saveProvidersNow();
-      }));
+        });
+        el.addEventListener('change', (event) => {
+          provider.models[event.target.dataset.modelName].name = event.target.value;
+          if (!String(provider.models[event.target.dataset.modelName].id || '').trim() || state.selectedProvider === -2) {
+            setStatus('Unsaved draft');
+            return;
+          }
+          saveProvidersNow();
+        });
+      });
       tbody.querySelectorAll('[data-model-endpoint]').forEach((el) => el.addEventListener('change', (event) => {
         provider.models[event.target.dataset.modelEndpoint].endpointType = event.target.value;
+        if (!String(provider.models[event.target.dataset.modelEndpoint].id || '').trim()) {
+          setStatus('Unsaved draft');
+          return;
+        }
         if (state.selectedProvider === -2) {
           setStatus('Unsaved draft');
           return;
@@ -953,7 +1029,6 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       provider.baseUrl = document.getElementById('providerBaseUrl').value;
       provider.apiKey = document.getElementById('providerApiKey').value;
       provider.enabled = document.getElementById('providerEnabled').dataset.value !== 'false';
-      renderProviders();
     }
 
     function renderMcp() {
@@ -976,19 +1051,27 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
           '</div>');
       }
       list.innerHTML = items.join('');
-      list.querySelectorAll('[data-mcp-index]').forEach((el) => el.addEventListener('click', () => {
-        state.selectedMcp = Number(el.dataset.mcpIndex);
-        renderMcp();
-      }));
+      list.querySelectorAll('[data-mcp-index]').forEach((el) => {
+        el.addEventListener('click', () => {
+          state.selectedMcp = Number(el.dataset.mcpIndex);
+          state.mcpEditingName = state.mcpServers[state.selectedMcp]?.config?.name || '';
+          hideMcpContextMenu();
+          renderMcp();
+        });
+        el.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          openMcpContextMenu(event.clientX, event.clientY, Number(el.dataset.mcpIndex));
+        });
+      });
       list.querySelectorAll('[data-mcp-draft]').forEach((el) => el.addEventListener('click', () => {
         state.selectedMcp = -2;
+        hideMcpContextMenu();
         renderMcp();
       }));
       const server = state.selectedMcp === -2 ? undefined : state.mcpServers[state.selectedMcp];
       const draft = state.selectedMcp === -2 ? state.mcpDraft : null;
       const empty = document.getElementById('mcpEmpty');
       const editor = document.getElementById('mcpEditor');
-      document.getElementById('removeMcp').disabled = !server && !draft;
       if (!server && !draft) {
         empty.style.display = 'block';
         editor.style.display = 'none';
@@ -1010,7 +1093,6 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       document.getElementById('connectMcp').disabled = !server || server.status === 'connected' || server.status === 'connecting';
       document.getElementById('disconnectMcp').disabled = !server || server.status !== 'connected';
       document.getElementById('refreshMcpTools').disabled = !server || server.status !== 'connected';
-      document.getElementById('saveMcp').disabled = !!server && (server.status === 'connected' || server.status === 'connecting');
       document.getElementById('mcpTools').innerHTML = draft
         ? '<div class="muted">Save this draft to create the server, then connect to load tools.</div>'
         : (server.tools || []).map((tool) => '<div class="tool"><strong>' + escapeHtml(tool.name) + '</strong><span class="muted">' + escapeHtml(tool.description || '') + '</span></div>').join('') || '<div class="muted">No tools loaded.</div>';
@@ -1029,6 +1111,15 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     function syncMcpDraft() {
       if (state.selectedMcp !== -2 || !state.mcpDraft) return;
       Object.assign(state.mcpDraft, currentMcpPayload());
+    }
+    function syncMcpEditor() {
+      if (state.selectedMcp === -2) {
+        syncMcpDraft();
+        return;
+      }
+      const server = state.mcpServers[state.selectedMcp];
+      if (!server || server.status === 'connected' || server.status === 'connecting') return;
+      Object.assign(server.config, currentMcpPayload());
     }
 
     function renderPermissions() {
@@ -1074,11 +1165,16 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     document.getElementById('addProvider').addEventListener('click', () => {
       state.providerDraft = { id: '', label: 'New Provider', apiType: 'openai-chat', baseUrl: '', apiKey: '', defaultModel: '', enabled: true, models: [{ id: '', name: '', endpointType: 'OPENAI' }] };
       state.selectedProvider = -2;
+      hideContextMenus();
       renderProviders();
       setStatus('Draft created');
     });
     ['providerName','providerBaseUrl','providerApiKey'].forEach((id) => {
       document.getElementById(id).addEventListener('input', () => {
+        syncProviderDraft();
+        setStatus('Unsaved draft');
+      });
+      document.getElementById(id).addEventListener('change', () => {
         syncProviderDraft();
         if (state.selectedProvider === -2) {
           if (commitProviderDraftIfReady()) {
@@ -1142,67 +1238,60 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       saveProvidersNow();
     });
     document.addEventListener('click', (event) => {
-      if (!providerContextMenu.contains(event.target)) {
-        hideProviderContextMenu();
-      }
+      if (!providerContextMenu.contains(event.target)) hideProviderContextMenu();
+      if (!mcpContextMenu.contains(event.target)) hideMcpContextMenu();
     });
-    window.addEventListener('blur', hideProviderContextMenu);
-    window.addEventListener('scroll', hideProviderContextMenu, true);
+    window.addEventListener('blur', hideContextMenus);
+    window.addEventListener('scroll', hideContextMenus, true);
     document.getElementById('addProviderModel').addEventListener('click', () => {
       const provider = state.selectedProvider === -2 ? state.providerDraft : state.providers[state.selectedProvider];
       if (!provider) return;
       provider.models = Array.isArray(provider.models) ? provider.models : [];
       provider.models.push({ id: '', name: '', endpointType: 'OPENAI' });
       renderProviderModels();
-      if (state.selectedProvider === -2) {
-        if (commitProviderDraftIfReady()) {
-          return;
-        }
-        setStatus('Unsaved draft');
-        return;
-      }
-      saveProvidersNow();
+      setStatus('Unsaved draft');
     });
 
     document.getElementById('addMcp').addEventListener('click', () => {
-      state.mcpDraft = { name: 'new-server', url: '', enabled: true, timeout: '', headers: '' };
+      state.mcpDraft = { name: uniqueMcpName('new-server'), url: '', enabled: true, timeout: '', headers: '' };
       state.selectedMcp = -2;
+      state.mcpEditingName = '';
+      hideContextMenus();
       renderMcp();
       setStatus('Draft created');
     });
-    document.getElementById('saveMcp').addEventListener('click', () => {
-      if (state.selectedMcp === -2) {
-        syncMcpDraft();
-        setStatus('Saving...');
-        vscode.postMessage({ type: 'add-mcp', server: state.mcpDraft });
-        state.mcpDraft = null;
-        state.selectedMcp = 0;
-        return;
-      }
-      const server = state.mcpServers[state.selectedMcp];
+    document.getElementById('duplicateMcpAction').addEventListener('click', () => {
+      const index = Number(mcpContextMenu.dataset.index);
+      const server = state.mcpServers[index];
+      hideMcpContextMenu();
       if (!server) return;
+      const config = server.config;
+      const copy = {
+        ...config,
+        name: uniqueMcpName((config.name || 'server') + '-copy'),
+        headers: config.headers ? { ...config.headers } : undefined,
+      };
+      state.selectedMcp = state.mcpServers.length;
+      state.mcpEditingName = copy.name;
       setStatus('Saving...');
-      vscode.postMessage({ type: 'update-mcp', name: server.config.name, server: currentMcpPayload() });
+      vscode.postMessage({ type: 'add-mcp', server: copy });
     });
-    document.getElementById('removeMcp').addEventListener('click', () => {
-      if (state.selectedMcp === -2) {
-        state.mcpDraft = null;
-        state.selectedMcp = state.mcpServers.length > 0 ? 0 : -1;
-        renderMcp();
-        setStatus('Draft removed');
-        return;
-      }
-      const server = state.mcpServers[state.selectedMcp];
+    document.getElementById('deleteMcpAction').addEventListener('click', () => {
+      const index = Number(mcpContextMenu.dataset.index);
+      const server = state.mcpServers[index];
+      hideMcpContextMenu();
       if (!server) return;
       setStatus('Saving...');
       vscode.postMessage({ type: 'remove-mcp', name: server.config.name });
     });
     ['mcpName','mcpUrl','mcpTimeout','mcpHeaders'].forEach((id) => {
       document.getElementById(id).addEventListener('input', () => {
-        if (state.selectedMcp === -2) {
-          syncMcpDraft();
-          setStatus('Unsaved draft');
-        }
+        syncMcpEditor();
+        setStatus('Unsaved draft');
+      });
+      document.getElementById(id).addEventListener('change', () => {
+        syncMcpEditor();
+        saveMcpNow();
       });
     });
     document.getElementById('mcpEnabled').addEventListener('click', () => {
@@ -1210,10 +1299,8 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
       const next = el.dataset.value === 'false' ? 'true' : 'false';
       el.dataset.value = next;
       el.classList.toggle('on', next !== 'false');
-      if (state.selectedMcp === -2) {
-        syncMcpDraft();
-        setStatus('Unsaved draft');
-      }
+      syncMcpEditor();
+      saveMcpNow();
     });
     document.getElementById('connectMcp').addEventListener('click', () => {
       const server = state.mcpServers[state.selectedMcp];
