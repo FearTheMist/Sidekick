@@ -12,6 +12,8 @@ import { openPermissionPanel } from "./features/permissions/permissionPanel";
 import { openControlCenterPanel } from "./features/controlCenter/controlCenterPanel";
 
 const execAsync = promisify(exec);
+const commitMessageMaxAttempts = 2;
+const commitMessageRetryDelayMs = 500;
 
 export function activate(context: vscode.ExtensionContext): void {
   const gateway = new LlmGateway(SidekickConfig.getProviders());
@@ -332,25 +334,29 @@ async function generateCommitMessage(
       ].join("\n");
 
       let text = "";
-      try {
-        for await (const event of gateway.streamChat({
-          profile,
-          messages: [{ role: "user", content: prompt }],
-          extraBody: buildNoThinkingParams(selectedProvider, profile.model),
-        })) {
-          if (event.type === "text") {
-            text += event.delta;
+      let failure = "";
+      for (let attempt = 1; attempt <= commitMessageMaxAttempts; attempt += 1) {
+        try {
+          text = await requestCommitMessage(gateway, {
+            profile,
+            prompt,
+            selectedProvider,
+          });
+          failure = "";
+          break;
+        } catch (error) {
+          failure = formatErrorMessage(error);
+          if (attempt < commitMessageMaxAttempts && isRetryableGenerationError(error)) {
+            await delay(commitMessageRetryDelayMs);
+            continue;
           }
-          if (event.type === "error") {
-            vscode.window.showErrorMessage(
-              `Commit message generation failed: ${event.message}`
-            );
-            return;
-          }
+          break;
         }
-      } catch (error) {
+      }
+
+      if (failure) {
         vscode.window.showErrorMessage(
-          `Commit message generation failed: ${String(error)}`
+          `Commit message generation failed: ${failure}`
         );
         return;
       }
@@ -372,6 +378,63 @@ async function generateCommitMessage(
       }
     }
   );
+}
+
+async function requestCommitMessage(
+  gateway: LlmGateway,
+  options: {
+    profile: {
+      providerId: string;
+      model?: string;
+      temperature?: number;
+      maxTokens?: number;
+    };
+    prompt: string;
+    selectedProvider: ProviderConfig | undefined;
+  }
+): Promise<string> {
+  let text = "";
+  for await (const event of gateway.streamChat({
+    profile: options.profile,
+    messages: [{ role: "user", content: options.prompt }],
+    extraBody: buildNoThinkingParams(
+      options.selectedProvider,
+      options.profile.model
+    ),
+  })) {
+    if (event.type === "text") {
+      text += event.delta;
+    }
+    if (event.type === "error") {
+      throw new Error(event.message);
+    }
+  }
+  return text;
+}
+
+function isRetryableGenerationError(error: unknown): boolean {
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    /http 5\d\d/.test(message) ||
+    message.includes("fetch failed") ||
+    message.includes("econnreset") ||
+    message.includes("econnrefused") ||
+    message.includes("etimedout") ||
+    message.includes("enotfound") ||
+    message.includes("network")
+  );
+}
+
+function formatErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const cause = error.cause ? `; cause: ${String(error.cause)}` : "";
+    return `${error.name}: ${error.message}${cause}`;
+  }
+  return String(error);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function truncateForLlm(text: string, maxChars: number): string {
