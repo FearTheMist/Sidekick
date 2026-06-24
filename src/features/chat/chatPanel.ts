@@ -132,6 +132,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     this.view = webviewView;
     webviewView.webview.options = {
       enableScripts: true,
+      localResourceRoots: [this.context.extensionUri],
     };
 
     if (this.migratedState) {
@@ -805,11 +806,20 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
   private renderHtml(webview: vscode.Webview): string {
     const nonce = String(Date.now());
+    const markedUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, "node_modules", "marked", "lib", "marked.umd.js")
+    );
+    const purifyUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, "node_modules", "dompurify", "dist", "purify.min.js")
+    );
+    const morphdomUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, "node_modules", "morphdom", "dist", "morphdom-umd.min.js")
+    );
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource} 'nonce-${nonce}';" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root {
@@ -990,6 +1000,85 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       border-radius: 0;
       background: transparent;
       box-shadow: none;
+    }
+    .msg > *:first-child { margin-top: 0; }
+    .msg > *:last-child { margin-bottom: 0; }
+    .msg p { margin: 0 0 12px; }
+    .msg h1,
+    .msg h2,
+    .msg h3,
+    .msg h4,
+    .msg h5,
+    .msg h6 {
+      margin: 0 0 16px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.5;
+    }
+    .msg ul,
+    .msg ol {
+      margin: 8px 0 12px;
+      padding-left: 28px;
+    }
+    .msg li { margin-bottom: 6px; }
+    .msg li > p:first-child {
+      display: inline;
+      margin: 0;
+    }
+    .msg blockquote {
+      margin: 12px 0;
+      padding-left: 10px;
+      border-left: 2px solid var(--stroke-strong);
+      color: var(--muted);
+    }
+    .msg a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+    .msg a:hover { text-decoration: underline; }
+    .msg hr {
+      border: none;
+      border-top: 1px solid var(--stroke-soft);
+      margin: 20px 0;
+    }
+    .msg table {
+      width: 100%;
+      margin: 12px 0;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .msg th,
+    .msg td {
+      padding: 6px 8px;
+      border: 1px solid var(--stroke-soft);
+      text-align: left;
+      vertical-align: top;
+    }
+    .msg th { background: rgba(255, 255, 255, 0.04); }
+    .msg :not(pre) > code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--green);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    .msg pre {
+      margin: 12px 0;
+      padding: 10px 12px;
+      border: 1px solid var(--stroke-soft);
+      border-radius: 8px;
+      background: rgba(13, 13, 13, 0.92);
+      overflow: auto;
+      line-height: 1.45;
+    }
+    .msg pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
     }
     .thinking {
       color: var(--muted);
@@ -1436,6 +1525,9 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     </div>
     <div id="rawDrawerBody" class="raw-drawer-body"></div>
   </aside>
+  <script nonce="${nonce}" src="${markedUri}"></script>
+  <script nonce="${nonce}" src="${purifyUri}"></script>
+  <script nonce="${nonce}" src="${morphdomUri}"></script>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const chatScreen = document.getElementById('chatScreen');
@@ -1479,6 +1571,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
     let currentView = 'chat';
     let pendingView = '';
     let inProgress = null;
+    let assistantBuffer = '';
     let isRunning = false;
     const toolCards = new Map();
 
@@ -1598,7 +1691,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       return out;
     }
 
-    function renderMarkdown(text) {
+    function fallbackMarkdown(text) {
       const tick = String.fromCharCode(96);
       const fence = tick + tick + tick;
       const escaped = escapeHtml(text);
@@ -1607,6 +1700,88 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         .replace(new RegExp('\\\\*\\\\*(.*?)\\\\*\\\\*', 'g'), '<strong>$1</strong>')
         .replace(new RegExp(tick + '([^' + tick + ']+)' + tick, 'g'), '<code>$1</code>')
         .replace(new RegExp('\\\\n', 'g'), '<br/>');
+    }
+
+    const markedApi = window.marked;
+    const markdownRenderer = markedApi && markedApi.Renderer ? new markedApi.Renderer() : null;
+    if (markdownRenderer) {
+      markdownRenderer.link = ({ href, title, text }) => {
+        const safeHref = typeof href === 'string' ? href : '';
+        const safeTitle = title ? ' title="' + escapeHtml(title) + '"' : '';
+        return '<a href="' + escapeHtml(safeHref) + '"' + safeTitle + ' class="external-link" target="_blank" rel="noopener noreferrer">' + text + '</a>';
+      };
+    }
+    if (markedApi && markedApi.setOptions) {
+      markedApi.setOptions({ renderer: markdownRenderer, breaks: false, gfm: true, async: false });
+    }
+    if (window.DOMPurify && window.DOMPurify.isSupported) {
+      window.DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+        if (!(node instanceof HTMLAnchorElement) || node.target !== '_blank') {
+          return;
+        }
+        const rel = node.getAttribute('rel') || '';
+        const parts = new Set(rel.split(/\\s+/).filter(Boolean));
+        parts.add('noopener');
+        parts.add('noreferrer');
+        node.setAttribute('rel', Array.from(parts).join(' '));
+      });
+    }
+
+    const sanitizeConfig = {
+      USE_PROFILES: { html: true },
+      SANITIZE_NAMED_PROPS: true,
+      FORBID_TAGS: ['style'],
+      FORBID_CONTENTS: ['style', 'script'],
+      ADD_ATTR: ['target'],
+    };
+
+    function healStreamingMarkdown(text) {
+      const tick = String.fromCharCode(96);
+      let out = text.replace(/\\r\\n?/g, '\\n');
+      const fencePattern = new RegExp('(^|\\n)([ \\t]{0,3})(' + tick + '{3,}|~{3,})', 'g');
+      const fences = Array.from(out.matchAll(fencePattern));
+      if (fences.length % 2 === 1) {
+        out += '\\n' + fences[fences.length - 1][3];
+      }
+      const openLink = out.lastIndexOf('](');
+      if (openLink > out.lastIndexOf(')')) {
+        out = out.slice(0, openLink) + out.slice(openLink + 2);
+      }
+      return out;
+    }
+
+    function renderMarkdown(text, streaming) {
+      if (!markedApi || !window.DOMPurify || !window.DOMPurify.isSupported) {
+        return fallbackMarkdown(text);
+      }
+      try {
+        const source = streaming ? healStreamingMarkdown(text) : text;
+        return window.DOMPurify.sanitize(markedApi.parse(source), sanitizeConfig);
+      } catch {
+        return fallbackMarkdown(text);
+      }
+    }
+
+    function decorateMarkdown(root) {
+      root.querySelectorAll('pre code').forEach((code) => {
+        code.innerHTML = highlightCode(code.textContent || '');
+      });
+    }
+
+    function setMarkdownContent(container, content, streaming) {
+      container.innerHTML = renderMarkdown(content, streaming);
+      decorateMarkdown(container);
+    }
+
+    function morphMarkdownContent(container, content, streaming) {
+      const temp = document.createElement('div');
+      temp.innerHTML = renderMarkdown(content, streaming);
+      decorateMarkdown(temp);
+      if (window.morphdom) {
+        window.morphdom(container, temp, { childrenOnly: true });
+        return;
+      }
+      container.innerHTML = temp.innerHTML;
     }
 
     function normalizeRawBatches(rawMessageBatches, rawMessages) {
@@ -1753,7 +1928,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
         const div = document.createElement('div');
         div.className = 'msg ' + role;
-        div.innerHTML = renderMarkdown(content);
+        setMarkdownContent(div, content, false);
 
         wrapper.appendChild(div);
         attachMessageActions(wrapper, role, content, rawMessageBatches, rawMessages, messageId, parts);
@@ -1764,7 +1939,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       const div = document.createElement('div');
       div.className = 'msg ' + role;
-      div.innerHTML = renderMarkdown(content);
+      setMarkdownContent(div, content, false);
       attachMessageActions(div, role, content, rawMessageBatches, rawMessages, messageId, parts);
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
@@ -2013,6 +2188,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       if (msg.type === 'assistant-start') {
+        assistantBuffer = '';
         inProgress = append('assistant', '');
         inProgress.dataset.loading = '1';
         inProgress.innerHTML = '<span class="thinking"><span>Sidekick is thinking</span><span class="thinking-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span></span>';
@@ -2021,15 +2197,17 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
 
       if (msg.type === 'assistant-delta' && inProgress) {
+        assistantBuffer += msg.delta || '';
         if (inProgress.dataset.loading === '1') {
-          inProgress.innerHTML = '';
           delete inProgress.dataset.loading;
         }
-        inProgress.innerHTML += renderMarkdown(msg.delta);
+        morphMarkdownContent(inProgress, assistantBuffer, true);
         messages.scrollTop = messages.scrollHeight;
       }
 
       if (msg.type === 'assistant-finalize' && inProgress) {
+        assistantBuffer = msg.message.content || assistantBuffer;
+        setMarkdownContent(inProgress, assistantBuffer, false);
         attachMessageActions(
           inProgress,
           msg.message.role,
@@ -2048,6 +2226,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
 
       if (msg.type === 'assistant-end') {
         inProgress = null;
+        assistantBuffer = '';
         setRunState(false);
       }
 
