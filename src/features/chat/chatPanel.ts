@@ -1762,21 +1762,13 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    function decorateMarkdown(root) {
-      root.querySelectorAll('pre code').forEach((code) => {
-        code.innerHTML = highlightCode(code.textContent || '');
-      });
-    }
-
     function setMarkdownContent(container, content, streaming) {
       container.innerHTML = renderMarkdown(content, streaming);
-      decorateMarkdown(container);
     }
 
     function morphMarkdownContent(container, content, streaming) {
       const temp = document.createElement('div');
       temp.innerHTML = renderMarkdown(content, streaming);
-      decorateMarkdown(temp);
       if (window.morphdom) {
         window.morphdom(container, temp, { childrenOnly: true });
         return;
