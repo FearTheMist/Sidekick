@@ -238,7 +238,7 @@
             "en"
           ],
           "default": "auto",
-          "markdownDescription": "Language for generated commit messages. `auto` follows recent commit history when possible, otherwise infers from the diff.",
+          "markdownDescription": "Language for Sidekick responses and generated commit messages. For chat, `auto` follows the user's latest message. For commit messages, `auto` follows recent commit history when possible, otherwise infers from the diff.",
           "enumItemLabels": [
             "Auto",
             "中文",

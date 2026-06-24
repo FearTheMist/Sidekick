@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { AgentRunner } from "../../agent/agentRunner";
 import { McpManager } from "../../mcp/mcpManager";
-import { SidekickConfig } from "../../core/config";
+import { CommitMessageLanguage, SidekickConfig } from "../../core/config";
 import { LlmGateway, LlmMessage, ProviderConfig, RawMessageBatch } from "../../core/llm";
 import {
   collectContext,
@@ -675,6 +675,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
         "- No quotes",
         "- No punctuation at the end",
         "- Max 12 words",
+        getChatLanguageInstruction(SidekickConfig.getCommitMessageLanguage(), "title"),
       ].join("\n");
 
       let text = "";
@@ -718,6 +719,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       "Use first-principles reasoning from the user's real goal, not from surface wording alone.",
       "Keep the solution on the shortest correct path. Do not add compatibility layers, fallback logic, or extra designs unless the user explicitly asks for them.",
       "Ensure the full logic is correct end to end before answering or acting.",
+      getChatLanguageInstruction(SidekickConfig.getCommitMessageLanguage(), "response"),
     ].join(" ");
 
     if (detectVendor(provider, model) !== "qwen") {
@@ -734,7 +736,7 @@ export class ChatPanelProvider implements vscode.WebviewViewProvider {
       const prompt = Buffer.from(bytes).toString("utf8").trim();
       if (prompt) {
         ChatPanelProvider.qwenPromptCache = prompt;
-        return prompt;
+        return `${prompt}\n\n${getChatLanguageInstruction(SidekickConfig.getCommitMessageLanguage(), "response")}`;
       }
     } catch {
       // Fall through to base prompt if the prompt file cannot be read.
@@ -2074,6 +2076,22 @@ function sanitizeSessionTitle(raw: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 60);
+}
+
+function getChatLanguageInstruction(
+  language: CommitMessageLanguage,
+  target: "response" | "title"
+): string {
+  const noun = target === "title" ? "title" : "response";
+  if (language === "zh-CN") {
+    return `Write the ${noun} in Simplified Chinese.`;
+  }
+
+  if (language === "en") {
+    return `Write the ${noun} in English.`;
+  }
+
+  return `Write the ${noun} in the same language as the user's latest message unless the user explicitly requests another language.`;
 }
 
 function buildNoThinkingParams(

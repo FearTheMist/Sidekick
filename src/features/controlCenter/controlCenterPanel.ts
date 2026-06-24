@@ -735,8 +735,8 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
 
       <section id="section-general" class="section">
         <div class="card" style="max-width:640px;">
-          <h3>Commit Message Language</h3>
-          <p>Controls the language used when Sidekick generates commit messages.</p>
+          <h3>Output Language</h3>
+          <p>Controls the language used for Sidekick responses and generated commit messages.</p>
           <div class="field" style="margin-top:14px;"><label>Language</label><select id="generalCommitLanguage"><option value="auto">Auto</option><option value="zh-CN">中文</option><option value="en">English</option></select></div>
         </div>
       </section>
@@ -774,7 +774,7 @@ function getHtml(webview: vscode.Webview, nonce: string): string {
     const providerContextMenu = document.getElementById('providerContextMenu');
     const mcpContextMenu = document.getElementById('mcpContextMenu');
     const sectionNotes = {
-      providers: 'Configure your chat and agent providers, manage model lists, and set commit message language.',
+      providers: 'Configure your chat and agent providers, manage model lists, and set output language.',
       mcp: 'Manage MCP servers, inspect connection status, and refresh exposed tools.',
       permissions: 'Choose default behavior for each terminal permission class. Session approvals are temporary and can be cleared here.',
       general: 'Configure general Sidekick behavior that applies across chat, agents, and tool usage.'
